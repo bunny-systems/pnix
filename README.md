@@ -1,0 +1,3 @@
+# pnix
+
+Pins for nix
