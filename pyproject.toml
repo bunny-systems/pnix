@@ -1,0 +1,21 @@
+[project]
+name = "pnix"
+version = "0.1.0"
+description = "pins for nix"
+readme = "README.md"
+authors = [
+    { name = "N1meses", email = "nilshasenthal@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+license = "Apache-2.0"
+
+[project.scripts]
+pnix = "pnix:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

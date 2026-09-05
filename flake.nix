@@ -22,12 +22,16 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
+          packages = with pkgs; [
             uv
+            ruff
             python314
+            python314Packages.pytest
           ];
 
           shellHook = ''
+            export UV_PYTHON_DOWNLOADS=never
+            export UV_NO_MANAGED_PYTHON=1
             echo "pnix DevShell"
           '';
         };
