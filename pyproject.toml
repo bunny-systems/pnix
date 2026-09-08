@@ -11,7 +11,7 @@ dependencies = []
 license = "Apache-2.0"
 
 [project.scripts]
-pnix = "pnix:main"
+pnix = "pnix.cli:main"
 
 [build-system]
 requires = ["setuptools"]
@@ -19,3 +19,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.14"
