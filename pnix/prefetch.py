@@ -1,7 +1,9 @@
 """Fetch a source and return its hash.
 
 Uses only the stable Nix CLI: `nix-prefetch-url` and `nix-hash`, both of which
-work with `--option experimental-features ""`.
+work with `--option experimental-features ""`. **That path is always correct
+and always available** -- see `_fast_tarball` for an optional shortcut that is
+tried first and never required.
 
 Not `nix hash to-sri`, which the design named: every `nix <subcommand>` is
 gated behind the `nix-command` experimental feature, so calling it with
@@ -15,9 +17,11 @@ Nix 2.34.8.
 
 import datetime
 import io
+import json
 import subprocess
 import tarfile
 import tempfile
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -30,6 +34,77 @@ NO_EXPERIMENTAL = ["--option", "experimental-features", ""]
 
 class PrefetchError(Exception):
     pass
+
+
+# Whether `nix flake prefetch` can be used here. None until something has
+# tried. Asked by *doing*, because there is no way to ask: every capability
+# query is itself a `nix <subcommand>`, gated behind the feature being queried.
+_FAST: bool | None = None
+_FAST_LOCK = threading.Lock()
+
+
+def _fast_tarball(url: str) -> tuple[str, int | None] | None:
+    """`nix flake prefetch` if the flakes feature happens to be enabled.
+
+    A pure optimisation, and a large one: hashing nixpkgs costs 25 s of
+    unpack-and-NAR-hash through the stable CLI, while the flake fetcher answers
+    from Nix's fetcher cache in 0.28 s on a repeat. The cache is keyed on the
+    input and only the flake fetchers use it, which is the whole difference.
+
+    Safe to skip, because it is verified to produce the same two values:
+
+        nix-prefetch-url --unpack -> sha256-xB8mKMOx1IA9vTDNLmJZ6n4wCMq/cuWBBOzGCRnqxrU=
+        nix flake prefetch       -> sha256-xB8mKMOx1IA9vTDNLmJZ6n4wCMq/cuWBBOzGCRnqxrU=
+
+    and the same `lastModified`. Both are the NAR hash of the unpacked tree with
+    the top directory stripped, which is exactly what the vendored resolver's
+    `fetchTarball { sha256 = ...; }` checks against. `lastModified` matching
+    matters just as much: it feeds `lastModifiedDate`, which nixpkgs puts in its
+    own version string, so a disagreement would move every store path.
+
+    `tarball+<url>` rather than `github:owner/repo/rev`, so one code path covers
+    every forge including a self-hosted one.
+
+    Returns None when the feature is off, the tool is missing, or anything about
+    the output is unexpected -- never raises, because the caller has a correct
+    path to fall back to.
+    """
+    global _FAST
+    if _FAST is False:
+        return None
+    try:
+        proc = subprocess.run(
+            ["nix", "flake", "prefetch", "--json", f"tarball+{url}"],
+            capture_output=True, text=True, check=False, timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError):
+        with _FAST_LOCK:
+            _FAST = False
+        return None
+
+    if proc.returncode != 0:
+        # An experimental-features refusal is permanent for this process; a
+        # per-URL failure (404, network) is not, and must fall through to the
+        # stable path rather than disabling it for everything after.
+        if "experimental" in proc.stderr or "flake" in proc.stderr.lower():
+            with _FAST_LOCK:
+                _FAST = False
+        return None
+
+    try:
+        doc = json.loads(proc.stdout)
+        sri = doc["hash"]
+        mtime = doc.get("locked", {}).get("lastModified")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        with _FAST_LOCK:
+            _FAST = False
+        return None
+
+    if not isinstance(sri, str) or not sri.startswith("sha256-"):
+        return None
+    with _FAST_LOCK:
+        _FAST = True
+    return sri, (mtime if isinstance(mtime, int) else None)
 
 
 def to_sri(base32: str) -> str:
@@ -152,6 +227,10 @@ def tarball(url: str) -> tuple[str, int | None]:
     twice. Hashing a local copy yields the same NAR hash as hashing the remote
     URL, since the hash is of the unpacked tree.
     """
+    fast = _fast_tarball(url)
+    if fast is not None:
+        return fast
+
     try:
         with urllib.request.urlopen(_request(url), timeout=120) as resp:
             blob = resp.read()

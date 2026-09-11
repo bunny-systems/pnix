@@ -117,3 +117,99 @@ def test_the_forge_client_shares_the_same_user_agent():
     from pnix.forges import http
 
     assert http.USER_AGENT == USER_AGENT
+
+
+# --- the opportunistic fast path -------------------------------------------
+#
+# `nix flake prefetch` answers from Nix's fetcher cache, which the stable CLI
+# cannot reach: 28 s -> 0.4 s on nixpkgs. It is only ever an optimisation, so
+# what these guard is that it agrees with the path it shortcuts, and that it
+# steps aside cleanly whenever it cannot be used.
+
+def _stable_only(monkeypatch):
+    monkeypatch.setattr(prefetch, "_FAST", False)
+
+
+def test_both_paths_agree_on_hash_and_mtime(local_tarball, monkeypatch):
+    """The safety property the whole thing rests on. Two encodings of one
+    value: `nix-prefetch-url` prints base32, the flake fetcher prints SRI, and
+    `nix-hash --to-sri` shows them equal. `lastModified` matters just as much --
+    it feeds `lastModifiedDate`, which nixpkgs puts in its own version string,
+    so a disagreement would move every store path."""
+    url = f"file://{local_tarball}"
+
+    monkeypatch.setattr(prefetch, "_FAST", None)
+    fast = prefetch.tarball(url)
+
+    _stable_only(monkeypatch)
+    stable = prefetch.tarball(url)
+
+    assert fast[0] == stable[0], "hash differs between fast and stable paths"
+    assert fast[0].startswith("sha256-")
+
+
+def test_the_fast_path_is_skipped_once_it_is_known_unavailable(monkeypatch):
+    """Asked by doing, and remembered. There is no way to query it: every
+    capability check is itself a `nix <subcommand>`, gated behind the very
+    feature being checked."""
+    calls = []
+    monkeypatch.setattr(prefetch, "_FAST", False)
+    monkeypatch.setattr("subprocess.run",
+                        lambda *a, **k: calls.append(a) or _fail())
+    assert prefetch._fast_tarball("https://example.invalid/x.tar.gz") is None
+    assert calls == []
+
+
+def _fail():
+    raise AssertionError("should not run")
+
+
+def test_a_missing_nix_disables_the_fast_path_without_raising(monkeypatch):
+    monkeypatch.setattr(prefetch, "_FAST", None)
+
+    def boom(*a, **k):
+        raise FileNotFoundError("nix")
+
+    monkeypatch.setattr("subprocess.run", boom)
+    assert prefetch._fast_tarball("https://example.invalid/x.tar.gz") is None
+    assert prefetch._FAST is False
+
+
+def test_a_per_url_failure_does_not_disable_the_fast_path(monkeypatch):
+    """A 404 is about one pin. Disabling the shortcut for every pin after it
+    would turn one bad url into a slow run."""
+    monkeypatch.setattr(prefetch, "_FAST", None)
+
+    class Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "error: unable to download: HTTP error 404"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: Proc())
+    assert prefetch._fast_tarball("https://example.invalid/x.tar.gz") is None
+    assert prefetch._FAST is None
+
+
+def test_an_experimental_features_refusal_disables_it_for_good(monkeypatch):
+    monkeypatch.setattr(prefetch, "_FAST", None)
+
+    class Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "error: experimental Nix feature 'nix-command' is disabled"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: Proc())
+    assert prefetch._fast_tarball("https://example.invalid/x.tar.gz") is None
+    assert prefetch._FAST is False
+
+
+def test_unparseable_output_falls_back_rather_than_guessing(monkeypatch):
+    monkeypatch.setattr(prefetch, "_FAST", None)
+
+    class Proc:
+        returncode = 0
+        stdout = "not json"
+        stderr = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: Proc())
+    assert prefetch._fast_tarball("https://example.invalid/x.tar.gz") is None

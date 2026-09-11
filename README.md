@@ -91,6 +91,18 @@ Pins resolve concurrently, so the order is whatever finishes first. `-q`
 silences it; warnings and errors still print. stdout stays empty, so
 redirecting it captures only what you asked for.
 
+`update` uses `nix flake prefetch` when the flakes feature happens to be
+enabled, and falls back to the stable CLI when it is not. Purely a speed
+matter — hashing nixpkgs costs ~25 s of unpack-and-NAR-hash through
+`nix-prefetch-url`, against 0.4 s from Nix's fetcher cache, which only the
+flake fetchers can reach. Both routes are verified to produce the same `hash`
+and the same `lastModified`, and the resolver is untouched either way: **nothing
+a consumer evaluates requires an experimental feature, ever.**
+
+Availability is settled by trying, because it cannot be asked — every
+capability query is itself a `nix <subcommand>`, gated behind the feature being
+queried.
+
 There is no `add` or `rm`: declare a pin in the file that uses it, then
 `pnix update`. The lock is the only file pnix writes.
 
