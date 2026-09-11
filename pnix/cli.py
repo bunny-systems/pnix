@@ -132,11 +132,13 @@ class Progress:
     is for.
     """
 
-    def __init__(self, total: int, quiet: bool = False):
+    def __init__(self, total: int, quiet: bool = False, verbose: bool = False):
         self.total = total
         self.quiet = quiet or total == 0
+        self.verbose = verbose and not self.quiet
         self.done = 0
-        self.changed = 0
+        self.counts = {"new": 0, "updated": 0, "unchanged": 0}
+        self.width = 0
         self.started = time.monotonic()
         self._lock = threading.Lock()
         if not self.quiet:
@@ -146,37 +148,45 @@ class Progress:
     def fetching(self, name: str) -> None:
         """Announced *before* the download, because that is where the time is.
 
-        Resolving a ref is one ls-remote, under a second. Hashing means pulling
-        the source: nixpkgs alone is ~15 s. Reporting only on completion left
-        that entire window blank, which was the original complaint.
+        Behind `-v`. With 24 pins the `[n/total]` counter already shows the run
+        moving, and interleaving two lines per pin from eight threads buries the
+        results -- which are what the command is for. It earns its place on a
+        run of one or two slow pins, where nothing else moves for 15 s.
         """
-        if not self.quiet:
+        if self.verbose:
             with self._lock:
                 print(f"  fetching {name}...", file=sys.stderr)
+
+    #: A pin has no upstream to be "ahead" or "diverged" *of* -- the lock holds
+    #: one rev, and saying more would mean a commit-graph walk per pin.
+    STATES = ("new", "updated", "unchanged")
 
     def finish(self, name: str, before: dict, after: dict) -> None:
         old, new = before.get("rev"), after.get("rev")
         if not before:
-            note = f"new -> {new[:8]}" if new else "new"
+            state, detail = "new", (new or "?")[:8]
         elif old == new:
-            note = "unchanged"
+            state, detail = "unchanged", (old or "?")[:8]
         else:
-            note = f"{(old or '?')[:8]} -> {(new or '?')[:8]}"
+            state, detail = "updated", f"{(old or '?')[:8]} -> {(new or '?')[:8]}"
+
         with self._lock:
             self.done += 1
-            if old != new or not before:
-                self.changed += 1
+            self.counts[state] += 1
             if not self.quiet:
-                print(f"  [{self.done}/{self.total}] {name}: {note}",
+                n = len(str(self.total))
+                print(f"  [{self.done:>{n}}/{self.total}] "
+                      f"{name:<{self.width}}  {state:<9} {detail}",
                       file=sys.stderr)
 
     def summary(self) -> None:
         if self.quiet:
             return
         secs = time.monotonic() - self.started
+        parts = [f"{self.counts[s]} {s}" for s in self.STATES if self.counts[s]]
         print(
-            f"pnix: {self.done} pin{'s' * (self.done != 1)} resolved, "
-            f"{self.changed} changed, {secs:.1f}s",
+            f"pnix: {self.done} pin{'s' * (self.done != 1)} resolved"
+            f"{' -- ' + ', '.join(parts) if parts else ''}, {secs:.1f}s",
             file=sys.stderr,
         )
 
@@ -184,7 +194,8 @@ class Progress:
 def _resolve_all(project: Path, names: list[str], write: bool,
                  roots: list[Path] | None = None,
                  prefetch: bool = True,
-                 quiet: bool = True) -> tuple[dict, dict]:
+                 quiet: bool = True,
+                 verbose: bool = False) -> tuple[dict, dict]:
     """Resolve every declared pin. Returns (resolved, previous lock contents).
 
     `prefetch=False` is what makes `pnix look` cheap: resolving a ref is one
@@ -216,7 +227,9 @@ def _resolve_all(project: Path, names: list[str], write: bool,
     # Each pin is an independent network round-trip: ~0.86 s for the ls-remote
     # alone, so 21 pins serially is ~18 s. Pool the whole per-pin pipeline
     # (resolve, then prefetch when the rev actually moved).
-    progress = Progress(len(todo), quiet=quiet)
+    progress = Progress(len(todo), quiet=quiet, verbose=verbose)
+    # Names are known up front, so the result column can line up.
+    progress.width = max((len(n) for n in todo), default=0)
 
     def one(name: str) -> tuple[str, dict]:
         spec = todo[name]
@@ -264,7 +277,8 @@ def _resolve_all(project: Path, names: list[str], write: bool,
 
 def cmd_update(args) -> int:
     resolved, _ = _resolve_all(find_project(args.project), args.names, write=True,
-                               roots=args.root, quiet=args.quiet)
+                               roots=args.root, quiet=args.quiet,
+                               verbose=args.verbose)
     for name in sorted(resolved):
         for line in patches_mod.applies_to(resolved[name]):
             print(f"pnix: {name}: {line}", file=sys.stderr)
@@ -338,6 +352,8 @@ def main(argv: list[str] | None = None) -> int:
                     help=root_help)
     up.add_argument("-q", "--quiet", action="store_true",
                     help="no per-pin progress; warnings and errors still print")
+    up.add_argument("-v", "--verbose", action="store_true",
+                    help="also report each download as it starts")
     up.set_defaults(func=cmd_update)
 
     it = sub.add_parser("init", help="vendor the resolver into this project")

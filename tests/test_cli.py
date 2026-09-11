@@ -176,25 +176,45 @@ def test_update_reports_each_pin_as_it_lands(fake_project, capsys):
     cli.main(["--project", str(fake_project), "update"])
     err = capsys.readouterr().err
     assert "resolving 1 pin" in err
-    assert "[1/1] foo: new -> " in err
-    assert "1 pin resolved, 1 changed" in err
+    assert "[1/1]" in err and "foo" in err and "new" in err
+    assert "1 pin resolved -- 1 new" in err
 
 
-def test_update_announces_the_download_before_it_starts(fake_project, capsys):
+def test_the_three_states_are_named_not_inferred(fake_project, capsys):
+    """`new`, `updated`, `unchanged`. Not `ahead` or `diverged`: a pin has no
+    upstream to be ahead *of*, and saying more would mean a commit-graph walk
+    per pin."""
+    cli.main(["--project", str(fake_project), "update"])
+    assert "new" in capsys.readouterr().err
+
+    cli.main(["--project", str(fake_project), "update"])
+    assert "unchanged" in capsys.readouterr().err
+
+
+def test_the_download_line_is_behind_verbose(fake_project, capsys):
+    """With 24 pins the counter already shows the run moving, and two lines per
+    pin from eight threads buries the results. It earns its place on a run of
+    one or two slow pins, where nothing else moves for 15 s."""
+    cli.main(["--project", str(fake_project), "update"])
+    assert "fetching foo" not in capsys.readouterr().err
+
+
+def test_verbose_announces_the_download_before_it_starts(fake_project, capsys):
     """The line has to come *before* the slow part or it reports nothing while
     the time is actually passing."""
-    cli.main(["--project", str(fake_project), "update"])
+    cli.main(["--project", str(fake_project), "update", "-v"])
     err = capsys.readouterr().err
-    assert err.index("fetching foo") < err.index("[1/1] foo")
+    assert err.index("fetching foo") < err.index("[1/1]")
 
 
-def test_a_pin_that_did_not_move_says_so_and_is_not_counted(fake_project, capsys):
+def test_a_pin_that_did_not_move_says_so(fake_project, capsys):
     cli.main(["--project", str(fake_project), "update"])
     capsys.readouterr()
-    cli.main(["--project", str(fake_project), "update"])
+    cli.main(["--project", str(fake_project), "update", "-v"])
     err = capsys.readouterr().err
-    assert "foo: unchanged" in err
-    assert "0 changed" in err
+    assert "unchanged" in err
+    assert "1 unchanged" in err
+    # An unchanged pin is never downloaded, even asked verbosely.
     assert "fetching foo" not in err
 
 
