@@ -82,5 +82,15 @@ else if node != null then
     inherit nodeName;
     follows = deepFollows;
   }
+else if declaredSpec._indirect or false then
+  # 4a. An input the flake's `outputs` asks for that it never declared and its
+  # lock never recorded. Handing back `{ }` let the upstream fail somewhere far
+  # away -- `nixpkgs.legacyPackages.…` on an empty set -- instead of here, where
+  # the remedy is. The transitive path (resolve.nix's `evalNode`) always threw;
+  # only the top-level path was silent, and the two disagreeing is the bug.
+  throw "pnix: '${hostName}' needs input '${subName}', which it neither declares nor locks. Add it to `allFollow`, or `follows.${subName}` on the '${hostName}' pin."
 else
+  # 4b. A *declared* input that nothing resolved. Empty, as before: a flake
+  # naming an input is at least evidence it meant to, and `follows = \"\"` is a
+  # legitimate way to say the input is deliberately nothing.
   { }

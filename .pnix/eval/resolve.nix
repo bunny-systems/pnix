@@ -210,7 +210,7 @@ let
         inputs = builtins.mapAttrs (
           subName: spec: resolveSub name subName (if builtins.isAttrs spec then spec else { })
         ) (fl.declaredInputs dir);
-        indirect = subName: resolveSub name subName { };
+        indirect = subName: resolveSub name subName { _indirect = true; };
       }
     else
       sourceInfo

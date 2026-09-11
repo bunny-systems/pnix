@@ -45,5 +45,7 @@ else if node != null then
     inherit nodeName;
     follows = deepFollows;
   }
+else if declaredSpec._indirect or false then
+  throw "pnix: '${hostName}' needs input '${subName}', which it neither declares nor locks. Add it to `allFollow`, or `follows.${subName}` on the '${hostName}' pin."
 else
   { }

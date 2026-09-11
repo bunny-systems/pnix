@@ -450,7 +450,18 @@ A sub-input resolves in four steps:
 1. an explicit `follows` — on the flake's own declaration or on your pin;
 2. the `allFollow` policy, unless this pin lists the name in `excludeFollow`;
 3. **the pinned source's own `flake.lock`**, evaluated as a flake;
-4. `{ }`.
+4. nothing left — and what happens depends on how the input was asked for:
+   a **declared** input becomes `{ }`, since `follows = ""` is a legitimate way
+   to say "deliberately nothing"; an input the flake's `outputs` merely asks for,
+   never declaring or locking it, **throws**:
+
+   ```
+   pnix: 'up' needs input 'nixpkgs', which it neither declares nor locks.
+   Add it to `allFollow`, or `follows.nixpkgs` on the 'up' pin.
+   ```
+
+   Handing that case `{ }` made the upstream fail somewhere far away —
+   `nixpkgs.legacyPackages.…` on an empty set — instead of where the remedy is.
 
 Step 3 is what makes `excludeFollow` mean something. The policy keeps applying
 below it, so a transitive dependency still lands on your nixpkgs unless the pin

@@ -155,4 +155,26 @@ in
     expr = resolveNoLock "loner" "nixpkgs" { };
     expected = { };
   }
+
+  # An input the upstream `outputs` merely asks for, which it never declared
+  # and never locked. Handing back `{ }` made the upstream fail far away --
+  # `nixpkgs.legacyPackages.…` on an empty set -- instead of here, where the
+  # remedy is. resolve.nix's transitive path always threw; only the top-level
+  # path was silent, and the two disagreeing is what made it a bug.
+  {
+    name = "an indirect input nothing resolved throws, rather than being empty";
+    expr = throws (resolveNoLock "loner" "nixpkgs" { _indirect = true; });
+    expected = true;
+  }
+  {
+    name = "a declared input nothing resolved is still empty";
+    expr = resolveNoLock "loner" "nixpkgs" { };
+    expected = { };
+  }
+  {
+    name = "an indirect input the policy answers for does not throw";
+    # `resolve` carries an allFollow policy; step 2 answers before step 4a can.
+    expr = throws (resolve "loner" "nixpkgs" { _indirect = true; });
+    expected = false;
+  }
 ]

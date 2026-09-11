@@ -288,7 +288,9 @@ let
         inputs = builtins.mapAttrs (
           subName: spec: resolveSub name subName (if builtins.isAttrs spec then spec else { })
         ) (fl.declaredInputs dir);
-        indirect = subName: resolveSub name subName { };
+        # `_indirect` is how follows.nix tells an input the flake merely asked
+        # for from one it declared: the first must not silently resolve to `{ }`.
+        indirect = subName: resolveSub name subName { _indirect = true; };
       }
     else
       sourceInfo
