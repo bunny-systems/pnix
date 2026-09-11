@@ -11,12 +11,19 @@ No `lib`, no `evalModules`, no flakes, no runtime dependency beyond `git` and
 ## Running it
 
 ```sh
-nix-shell --run "pnix --project ~/nixconfig update"    # dev shell
-nix-build -A packages.default                          # build the CLI
-nix develop -c pnix …                                  # flakes, if you prefer
+nix-build -A packages.default && ./result/bin/pnix --help    # from a checkout
+nix-env -f . -iA packages.default                            # into your profile
 ```
 
-`--project` comes **before** the subcommand.
+Straight from a remote, no checkout and no flakes — `default.nix` resolves its
+own nixpkgs from its own lock, so nothing else is needed:
+
+```sh
+nix-env -f https://forgejo.example.com/you/pnix/archive/main.tar.gz -iA packages.default
+nix run "git+https://forgejo.example.com/you/pnix" -- --help    # flakes, if you prefer
+```
+
+Swap `main` for a rev to pin it. `--project` comes **before** the subcommand.
 
 ### This repo has no flake inputs
 
@@ -32,6 +39,7 @@ resolver in `.pnix/` — the dev environment is an integration test of the tool.
 | `shell.nix` | the dev shell |
 | `pins.nix` | this repo's own pin declarations |
 | `flake.nix` | passthrough, inputless |
+| `.pnix/` | this repo's own vendored resolver and lock |
 
 Every flake command has a flakeless equivalent:
 
