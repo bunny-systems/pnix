@@ -2,12 +2,30 @@
 
 The lock is the only file pnix writes. Declarations live in the consumer's
 modules; nothing else on disk is generated.
+
+Schema 2 (2026-09-11) adds the `fetch` discriminator and splits every pin
+entry in two:
+
+* **read by the vendored resolver, and therefore frozen by the schema** --
+  `fetch`, `rev`, `narHash`, `lastModified`, `flake`, `dir`, `follows`,
+  `excludeFollow`, and from schema 3 `patches` and `importable`;
+* **provenance, read only by pnix itself** -- `type`, `host`, `owner`, `repo`,
+  `url`, `ref`, `submodules`, `shallow`, `patches`, and whatever a future
+  source type wants. These can change without a schema bump, because nothing
+  in the consumer's repo looks at them.
+
+Schema 3 (2026-09-11) adds `patches`. It is a bump rather than an additive
+change precisely because the vendored resolver has to read it: a resolver that
+predates patches would ignore the field and hand back an *unpatched* source
+while the lock said otherwise -- silent, and wrong in the dangerous direction.
+Each patch node carries `url` and `hash` for the resolver, and `head`/`base`/
+`state`/`merged` as provenance for `pnix look`.
 """
 
 import json
 from pathlib import Path
 
-SCHEMA = 1
+SCHEMA = 3
 
 
 class SchemaError(Exception):
