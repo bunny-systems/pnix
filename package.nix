@@ -45,7 +45,7 @@ python3Packages.buildPythonApplication {
 
   meta = {
     description = "Nix-native input pinning with per-file declarations and PR-tracked patches";
-    license = lib.licenses.asl20;
+    license = lib.licenses.eupl12;
     mainProgram = "pnix";
   };
 }

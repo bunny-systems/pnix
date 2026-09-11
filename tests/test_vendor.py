@@ -117,19 +117,33 @@ def test_the_layout_is_a_single_dot_directory(tmp_path):
     assert str(cli.LOCK_NAME) == ".pnix/pins.lock.json"
 
 
-def test_vendored_files_carry_no_comments(tmp_path):
+def test_vendored_files_carry_no_comments_below_the_header(tmp_path):
     """The vendored copy is generated code in someone else's repository. The
-    reasoning stays with the source, where whoever changes it will be."""
+    reasoning stays with the source, where whoever changes it will be -- but the
+    two header lines survive, because one is what `init` uses to tell an adopted
+    file from a managed one and the other is the licence this code is under."""
     for path in vendor.install(tmp_path):
-        body = path.read_text().split("\n", 1)[1]
+        body = path.read_text().split("\n", 2)[2]
         assert not [l for l in body.splitlines() if l.lstrip().startswith("#")]
 
 
-def test_the_marker_survives_stripping(tmp_path):
-    """It is itself a comment, and `init` refusing to clobber an adopted file
-    depends on it."""
+def test_the_marker_and_licence_survive_stripping(tmp_path):
+    """Both are comments, and the stripper would take them. `init` refusing to
+    clobber an adopted file depends on the marker; the SPDX line is the only
+    thing telling a consumer what licence the code in their tree is under,
+    since `init` is redistribution."""
     for path in vendor.install(tmp_path):
-        assert path.read_text().startswith(vendor.MARKER)
+        head = path.read_text().split("\n")[:2]
+        assert head[0] == vendor.MARKER
+        assert head[1] == vendor.SPDX
+
+
+def test_the_licence_stamped_matches_the_project(tmp_path):
+    """One place to change, and a test that notices if only one of them did."""
+    import tomllib
+
+    cfg = tomllib.loads((RESOLVER.parent.parent / "pyproject.toml").read_text())
+    assert vendor.SPDX.endswith(cfg["project"]["license"])
 
 
 def test_stripping_preserves_the_parse_tree(tmp_path):

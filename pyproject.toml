@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = []
-license = "Apache-2.0"
+license = "EUPL-1.2"
 
 [project.scripts]
 pnix = "pnix.cli:main"

@@ -19,6 +19,17 @@ from pathlib import Path
 
 MARKER = "# pnix-managed. delete this line to take ownership; pnix will leave it alone."
 
+#: Stamped on every vendored file, directly under the marker.
+#:
+#: `pnix init` copies this code into someone else's repository, which is
+#: redistribution -- so each file has to say what it is licensed under, and the
+#: comment stripper has to leave it alone. tack does the same, and it is the
+#: reason a consumer can tell at a glance what landed in their tree.
+SPDX = "# SPDX-License-Identifier: EUPL-1.2"
+
+#: The two lines every vendored file opens with.
+HEADER = f"{MARKER}\n{SPDX}"
+
 SOURCE = Path(__file__).resolve().parent / "resolver"
 DEST = Path(".pnix")
 
@@ -56,7 +67,8 @@ def _stripped(text: str) -> str:
 
 
 def _marked(text: str) -> str:
-    return text if text.startswith(MARKER) else f"{MARKER}\n{text}"
+    """Prepend marker and licence, after stripping, so neither is stripped."""
+    return text if text.startswith(HEADER) else f"{HEADER}\n{text}"
 
 
 def install(project: Path, force: bool = False) -> list[Path]:
