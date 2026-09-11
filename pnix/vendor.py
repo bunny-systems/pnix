@@ -6,6 +6,12 @@ their resolvers for exactly this reason.
 
 Only the eval-time half is copied. collect.nix and walk.nix run during
 `pnix update`, so they ship with the CLI and cannot drift from it.
+
+Comments are stripped on the way out. The vendored copy is generated code that
+lands in someone else's repository and shows up in their diffs; the reasoning
+belongs with the source, which is where anyone changing it will be. Stripping
+is whole-line only and provably semantics-preserving -- see
+`test_stripping_preserves_the_parse_tree`.
 """
 
 import shutil
@@ -23,6 +29,30 @@ VERBATIM = (".LICENSE", ".md")
 
 class VendorError(Exception):
     pass
+
+
+def _stripped(text: str) -> str:
+    """Drop whole-line comments and collapse the blank runs they leave behind.
+
+    Whole-line only, so no lexer is needed: a `#` that opens a line cannot be
+    inside a string unless the string is a `''` block, and a file containing one
+    is left alone rather than guessed at. Trailing comments survive, which is
+    fine -- the resolver has none, and a wrong strip is far worse than a missed
+    one.
+    """
+    if "''" in text:
+        return text
+
+    out: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if not line.strip() and (not out or not out[-1].strip()):
+            continue
+        out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out) + "\n"
 
 
 def _marked(text: str) -> str:
@@ -54,7 +84,7 @@ def install(project: Path, force: bool = False) -> list[Path]:
         if src.suffix in VERBATIM:
             shutil.copyfile(src, dst)
         else:
-            dst.write_text(_marked(src.read_text()))
+            dst.write_text(_marked(_stripped(src.read_text())))
         written.append(dst)
 
     if not written:

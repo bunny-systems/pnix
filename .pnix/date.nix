@@ -1,16 +1,4 @@
 # pnix-managed. delete this line to take ownership; pnix will leave it alone.
-# epoch seconds -> the YYYYMMDDHHMMSS string flakes call `lastModifiedDate`.
-#
-# Nix computes this in C++ and there is no strftime in builtins, so it has to be
-# done by hand. It cannot simply be stored in pnix's lock either: a `flake =
-# false` input reached through step 3 comes from an *upstream* flake.lock, and
-# that format records `lastModified` only. Real consumers read the date string
-# off such inputs -- niri-nix's packages/niri.nix builds its version from
-# `src.lastModifiedDate` -- so without this the derivation differs.
-#
-# Howard Hinnant's civil_from_days, which is exact for the whole proleptic
-# Gregorian range. Nix's integer division truncates toward zero rather than
-# flooring; that differs only for negative operands, and these are timestamps.
 epoch:
 let
   days = epoch / 86400;

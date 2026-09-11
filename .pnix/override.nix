@@ -1,26 +1,4 @@
 # pnix-managed. delete this line to take ownership; pnix will leave it alone.
-# Imperative, per-run input overrides from the environment.
-#
-#   PNIX_OVERRIDE=finix=/home/nimeses/Projects/nix/finix nixos-rebuild …
-#   PNIX_OVERRIDE="finix=~/Projects/nix/finix,hjem=/tmp/hjem" nix-instantiate …
-#
-# Entries are `name=path`, separated by whitespace or commas. The path replaces
-# whatever the lock says for that pin; everything downstream is unchanged, so a
-# local checkout containing a flake.nix is evaluated as a flake exactly as a
-# fetched one would be.
-#
-# **Absolute paths only.** tack accepts flake refs here too, but it resolves
-# them with `builtins.getFlake` (override.nix:42,49) -- an experimental feature
-# pnix cannot use. A remote ref is what the lock is for; this is the escape
-# hatch for a working tree.
-#
-# `~/` is expanded, which the design argues against for *path pins* because
-# those are relative to their declaring file. An environment variable has no
-# declaring file, and a user typing this on a command line means their home.
-#
-# Every failure throws rather than being ignored: an override that silently did
-# nothing would be the worst possible outcome for a variable whose entire
-# purpose is "use my working tree instead".
 {
   pins,
   var ? "PNIX_OVERRIDE",

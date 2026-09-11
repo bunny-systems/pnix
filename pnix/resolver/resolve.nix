@@ -29,7 +29,7 @@
   nixpkgsPin ? "nixpkgs",
 }:
 let
-  fetchers = import ./fetchers/default.nix { };
+  fetchers = import ./fetchers.nix { };
   fl = import ./flake.nix;
   upstream = import ./upstream.nix;
   mkDate = import ./date.nix;

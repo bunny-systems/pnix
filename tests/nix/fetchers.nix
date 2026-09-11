@@ -1,6 +1,6 @@
 { }:
 let
-  fetchers = import ../../pnix/resolver/fetchers/default.nix { };
+  fetchers = import ../../pnix/resolver/fetchers.nix { };
   throws = v: !(builtins.tryEval v).success;
 in
 [

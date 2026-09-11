@@ -1,21 +1,57 @@
+import json
+import os
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from pnix import cli, vendor
+
+RESOLVER = Path(vendor.SOURCE)
+
+
+def _eval_json(expr: str):
+    out = subprocess.run(
+        ["nix-instantiate", "--eval", "--strict", "--json", "--expr", expr,
+         "--option", "experimental-features", ""],
+        capture_output=True, text=True, env=dict(os.environ), check=False,
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def _parse(path: Path, base: Path) -> str:
+    """Nix's parse tree, with absolute path literals made relative.
+
+    Path literals resolve against the file's own directory, so the vendored copy
+    and the source disagree on every `./x.nix` -- the one difference that is
+    expected and meaningless.
+    """
+    out = subprocess.run(
+        ["nix-instantiate", "--parse", str(path),
+         "--option", "experimental-features", ""],
+        capture_output=True, text=True, env=dict(os.environ), check=False,
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout.replace(str(base.resolve()), "<DIR>")
 
 
 def test_install_writes_the_eval_time_files(tmp_path):
     written = vendor.install(tmp_path)
     names = {p.name for p in written}
     assert {"resolve.nix", "flake.nix", "follows.nix", "upstream.nix"} <= names
-    assert (tmp_path / ".pnix" / "fetchers" / "tarball.nix").exists()
-    assert (tmp_path / ".pnix" / "fetchers" / "git.nix").exists()
+    assert (tmp_path / ".pnix" / "fetchers.nix").exists()
 
 
 def test_fetchers_are_primitives_not_source_types(tmp_path):
-    """Adding a forge must not put a new file in the consumer's repo."""
+    """Adding a forge must not add a fetcher. Asserted on the evaluated attrset
+    rather than on filenames, because the four primitives now share one file --
+    a file each implied that a new forge needed a new one, which is the opposite
+    of what the dispatch is for."""
     vendor.install(tmp_path)
-    have = {p.stem for p in (tmp_path / ".pnix" / "fetchers").glob("*.nix")}
-    assert have == {"default", "tarball", "file", "git", "path"}
+    have = _eval_json(f"builtins.attrNames (import {tmp_path}/.pnix/fetchers.nix "
+                      "{ }).primitives")
+    assert set(have) == {"tarball", "file", "git", "path"}
 
 
 def test_install_does_not_vendor_lock_time_files(tmp_path):
@@ -77,3 +113,35 @@ def test_the_layout_is_a_single_dot_directory(tmp_path):
     assert all(p.is_relative_to(tmp_path / ".pnix") for p in written)
     assert [p.name for p in tmp_path.iterdir()] == [".pnix"]
     assert str(cli.LOCK_NAME) == ".pnix/pins.lock.json"
+
+
+def test_vendored_files_carry_no_comments(tmp_path):
+    """The vendored copy is generated code in someone else's repository. The
+    reasoning stays with the source, where whoever changes it will be."""
+    for path in vendor.install(tmp_path):
+        body = path.read_text().split("\n", 1)[1]
+        assert not [l for l in body.splitlines() if l.lstrip().startswith("#")]
+
+
+def test_the_marker_survives_stripping(tmp_path):
+    """It is itself a comment, and `init` refusing to clobber an adopted file
+    depends on it."""
+    for path in vendor.install(tmp_path):
+        assert path.read_text().startswith(vendor.MARKER)
+
+
+def test_stripping_preserves_the_parse_tree(tmp_path):
+    """Comments do not appear in Nix's AST, so a strip that changed behaviour
+    would change the parse. This is what licenses stripping without a lexer."""
+    for dst in vendor.install(tmp_path):
+        src = RESOLVER / dst.relative_to(tmp_path / ".pnix")
+        assert _parse(dst, dst.parent) == _parse(src, src.parent), dst.name
+
+
+def test_a_multiline_string_defeats_the_strip(tmp_path, monkeypatch):
+    """A line opening with `#` inside a `''` block is text, not a comment.
+    Whole-line stripping cannot see the difference, so such a file is left
+    whole rather than guessed at."""
+    assert vendor._stripped("# gone\nx\n") == "x\n"
+    kept = "# kept\ns = \'\'\n# not a comment\n\'\';\n"
+    assert vendor._stripped(kept) == kept

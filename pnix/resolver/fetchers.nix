@@ -1,4 +1,3 @@
-# pnix-managed. delete this line to take ownership; pnix will leave it alone.
 # Fetch dispatch.
 #
 # **Primitives, not source types.** A lock node carries a small closed `fetch`
@@ -22,15 +21,57 @@
 # `builtin:unpack-channel` derivation. Adding that later costs one re-init --
 # once, for the primitive, rather than once per source type forever.
 #
+# All four primitives live here rather than in a file each. They are two to five
+# lines apiece, and a file each bought nothing except the impression that adding
+# a forge means adding one -- which is exactly what the paragraph above says it
+# must not mean.
+#
 # Every expression reachable from here must evaluate with experimental features
 # off: fetchTarball, fetchGit and fetchurl are stable; fetchTree is not.
 { }:
 let
   primitives = {
-    tarball = import ./tarball.nix;
-    file = import ./file.nix;
-    git = import ./git.nix;
-    path = import ./path.nix;
+    # An archive at a URL, unpacked. The hash is the NAR hash of the unpacked
+    # tree, so upstream recompression cannot invalidate it. This is what every
+    # forge's codeload endpoint reduces to -- github, gitlab, forgejo/gitea,
+    # sourcehut -- which is why those are Python-only additions.
+    tarball =
+      f:
+      builtins.fetchTarball {
+        inherit (f) url;
+        sha256 = f.hash;
+      };
+
+    # A single file at a URL, not unpacked. The hash is the *flat* file hash,
+    # not a NAR hash -- that is the whole reason this is a separate primitive
+    # from `tarball` rather than a flag on it.
+    file =
+      f:
+      builtins.fetchurl {
+        inherit (f) url;
+        sha256 = f.hash;
+      };
+
+    # A git checkout. Content-addressed by rev, so no hash is stored: a rev is
+    # already a cryptographic commitment to the tree.
+    #
+    # The primitive to use when submodules are needed -- forge tarballs do not
+    # carry them. Without a `ref`, allRefs is required: fetchGit defaults to the
+    # remote's HEAD branch and cannot find a rev that lives anywhere else.
+    git =
+      f:
+      builtins.fetchGit (
+        {
+          inherit (f) url rev;
+        }
+        // (if f ? ref then { inherit (f) ref; } else { allRefs = true; })
+        // (if f.submodules or false then { submodules = true; } else { })
+        // (if f.shallow or false then { shallow = true; } else { })
+      );
+
+    # A literal path. Carries no hash and breaks a clean clone elsewhere, so it
+    # belongs in pins.local.nix or an override, never in a committed lock.
+    path = f: /. + f.path;
   };
 
   known = names: builtins.concatStringsSep ", " (builtins.attrNames names);

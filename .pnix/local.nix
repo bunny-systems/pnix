@@ -1,26 +1,4 @@
 # pnix-managed. delete this line to take ownership; pnix will leave it alone.
-# Persistent, machine-local input overrides: `<project>/.pnix/pins.local.nix`.
-#
-# The declarative half of the override story. PNIX_OVERRIDE is for one command;
-# this is for a work session, and it survives closing the shell without being
-# retyped. Gitignore it -- that is the whole point, and pnix refuses to write
-# one into a repo for you.
-#
-#     # pins.local.nix
-#     {
-#       finix = ../finix;                        # a path literal, relative to here
-#       hjem  = "/home/me/Projects/nix/hjem";     # or an absolute path as a string
-#     }
-#
-# It overrides **resolution**, not declaration: the value replaces what the lock
-# fetches, and nothing is re-locked. Changing a pin's rev is `pnix update`, not
-# this. Consequently the file needs no `pins` attribute and must not have one --
-# a `pins.<name>` in here would make it a declaration candidate and the lock
-# would grow an entry nobody meant.
-#
-# An unknown name throws rather than being ignored, for the same reason as
-# PNIX_OVERRIDE: an override that silently does nothing is the worst outcome for
-# a mechanism whose only job is to take effect.
 {
   pins,
   file,
@@ -30,11 +8,6 @@ let
 
   known = builtins.concatStringsSep " " (builtins.attrNames pins);
 
-  # Eagerly, because `mapAttrs` is lazy in its values: a key nobody looks up is
-  # a key whose check never runs, and a typo would sit in this file doing
-  # nothing forever. Forcing the *names* is cheap and catches exactly that.
-  # Value checks below stay lazy on purpose -- they only matter for an override
-  # something actually reads.
   unknown = builtins.filter (n: !(pins ? ${n})) (builtins.attrNames raw);
 
   check =

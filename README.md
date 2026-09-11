@@ -69,6 +69,12 @@ unconditionally.
 
 ## First run
 
+`.pnix/` is the whole of pnix in your repo: ten files of pure-builtins Nix and
+the lock beside them, so `rm -rf .pnix` uninstalls it. The copy is stripped of
+comments — it is generated code that lands in your diffs, and the reasoning
+lives with the source in `pnix/resolver/`. Every file carries a marker line;
+delete it and `pnix init` leaves that file alone from then on.
+
 ```sh
 pnix --project ~/nixconfig init          # writes .pnix/, commit it
 # …declare some pins…

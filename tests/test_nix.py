@@ -35,6 +35,17 @@ def run_nix_cases(nix_file: Path) -> list[dict]:
     return json.loads(proc.stdout)
 
 
+def _eval_json(expr: str):
+    proc = subprocess.run(
+        ["nix-instantiate", "--eval", "--strict", "--json", "--expr", expr,
+         *NO_EXPERIMENTAL],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        pytest.fail(f"nix eval failed:\n{proc.stderr}")
+    return json.loads(proc.stdout)
+
+
 def check(name: str):
     for case in run_nix_cases(ROOT / "tests" / "nix" / f"{name}.nix"):
         assert case["ok"], f"{name} case failed: {case['name']}"
@@ -68,8 +79,9 @@ def test_every_source_kind_has_a_fetcher():
     that no source can emit a kind the vendored resolver cannot fetch.
     """
     from pnix import sources
-    have = {p.stem for p in (ROOT / "pnix" / "resolver" / "fetchers").glob("*.nix")}
-    have.discard("default")
+    have = set(_eval_json(
+        "builtins.attrNames (import "
+        f"{ROOT}/pnix/resolver/fetchers.nix {{ }}).primitives"))
     emitted = {k for src in sources.SOURCES.values() for k in src.kinds}
     assert emitted <= have, f"sources emit kinds with no fetcher: {emitted - have}"
 
