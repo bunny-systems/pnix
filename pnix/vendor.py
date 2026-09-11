@@ -14,7 +14,7 @@ from pathlib import Path
 MARKER = "# pnix-managed. delete this line to take ownership; pnix will leave it alone."
 
 SOURCE = Path(__file__).resolve().parent / "resolver"
-DEST = Path("nix") / "pins"
+DEST = Path(".pnix")
 
 # .nix files get the marker prepended; anything else is copied byte for byte.
 MARKABLE = ".nix"
@@ -30,7 +30,7 @@ def _marked(text: str) -> str:
 
 
 def install(project: Path, force: bool = False) -> list[Path]:
-    """Write the vendored resolver under <project>/nix/pins, return the paths.
+    """Write the vendored resolver under <project>/.pnix, return the paths.
 
     A destination file that no longer carries MARKER is treated as adopted by
     the user: refuse rather than discard their edits, unless forced.

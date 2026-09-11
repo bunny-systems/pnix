@@ -76,7 +76,7 @@ def locked(tmp_path_factory):
     src = Path(__file__).parent
     (project / "pins.nix").write_text((src / "pins.nix").read_text())
     assert cli.main(["--project", str(project), "update"]) == 0
-    return lock.read(project / "pins.lock.json")
+    return lock.read(project / cli.LOCK_NAME)
 
 
 def test_every_pin_locked(locked, tack):

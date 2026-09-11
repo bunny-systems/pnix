@@ -1,4 +1,4 @@
-# Persistent, machine-local input overrides: `<project>/pins.local.nix`.
+# Persistent, machine-local input overrides: `<project>/.pnix/pins.local.nix`.
 #
 # The declarative half of the override story. PNIX_OVERRIDE is for one command;
 # this is for a work session, and it survives closing the shell without being

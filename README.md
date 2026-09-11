@@ -22,8 +22,8 @@ nix develop -c pnix …                                  # flakes, if you prefer
 
 `default.nix` is the entry point; `flake.nix` only forwards to it and declares
 **no inputs at all**, so Nix writes no `flake.lock`. nixpkgs is pinned in this
-repo's own `pins.lock.json`, by pnix, and resolved by the copy of its own
-resolver in `nix/pins/` — the dev environment is an integration test of the tool.
+repo's own `.pnix/pins.lock.json`, by pnix, and resolved by the copy of its own
+resolver in `.pnix/` — the dev environment is an integration test of the tool.
 
 | file | what it is |
 |---|---|
@@ -47,7 +47,7 @@ nix-build -A formatter          nix fmt
 
 ```sh
 pnix init                    copy the eval-time resolver into this repo
-pnix update [name…]          resolve refs → revs, hash, write pins.lock.json
+pnix update [name…]          resolve refs → revs, hash, write the lock
 pnix look                    report drift; writes nothing, downloads nothing
 ```
 
@@ -62,23 +62,24 @@ There is no `add` or `rm`: declare a pin in the file that uses it, then
 `pnix update`. The lock is the only file pnix writes.
 
 **Scope your scan.** `--root modules` is usually right for a config repo — it
-keeps `.tack/`, `nix/pins/` and stray files out of collection.
+keeps `.tack/` and stray files out of collection. `.pnix/` is skipped
+unconditionally.
 
 ---
 
 ## First run
 
 ```sh
-pnix --project ~/nixconfig init          # writes nix/pins/, commit it
+pnix --project ~/nixconfig init          # writes .pnix/, commit it
 # …declare some pins…
-pnix --project ~/nixconfig update        # writes pins.lock.json, commit it
+pnix --project ~/nixconfig update        # writes .pnix/pins.lock.json, commit it
 ```
 
 Then in `default.nix`:
 
 ```nix
 let
-  resolved = import ./nix/pins {
+  resolved = import ./.pnix {
     allFollow = { nixpkgs = "nixpkgs"; hjem = "hjem"; };
   };
 in
@@ -228,7 +229,7 @@ pins.f = { owner = "o"; repo = "r"; rev = "abc123…"; };       # frozen
 ## Follows
 
 ```nix
-import ./nix/pins { allFollow = { nixpkgs = "nixpkgs"; hjem = "hjem"; }; }
+import ./.pnix { allFollow = { nixpkgs = "nixpkgs"; hjem = "hjem"; }; }
 ```
 
 `allFollow` maps an *input name* to the *pin* it should resolve to, globally. A
@@ -323,7 +324,7 @@ a module is usually the wrong tool when `mkForce`, overlays and `disabledModules
 exist.
 
 Patches need a nixpkgs to apply them; pnix uses the pin named `nixpkgs`. Rename
-with `import ./nix/pins { nixpkgsPin = "nixpkgs-stable"; }`.
+with `import ./.pnix { nixpkgsPin = "nixpkgs-stable"; }`.
 
 ---
 
@@ -333,11 +334,11 @@ Three layers, lowest to highest — each narrower in scope than the last.
 
 ```nix
 # 1. programmatic, this caller
-import ./nix/pins { overrides = { finix = ../finix; }; }
+import ./.pnix { overrides = { finix = ../finix; }; }
 ```
 
 ```nix
-# 2. pins.local.nix — this machine. Gitignore it.
+# 2. .pnix/pins.local.nix — this machine. Gitignore it.
 { finix = ../finix;
   hjem  = "/home/me/Projects/nix/hjem"; }
 ```
@@ -356,8 +357,8 @@ changing a rev is still `pnix update`. Every failure throws: an unknown pin name
 lists the known ones, a relative path and a missing directory are both refused.
 An override that silently did nothing would be the worst possible outcome.
 
-`pins.local.nix` must **not** contain a `pins` attribute, or discovery reads it
-as a declaration.
+`.pnix/pins.local.nix` must **not** contain a `pins` attribute. Discovery skips
+`.pnix/` outright, so this is only a hazard if you point `localFile` elsewhere.
 
 ---
 

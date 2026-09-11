@@ -6,9 +6,9 @@
 # order in follows.nix. Pure builtins, no lib, no experimental features -- a
 # fresh `git clone && nixos-rebuild --file .` must work with Nix alone.
 {
-  # Default suits the vendored layout: <consumer>/nix/pins/resolve.nix beside
-  # <consumer>/pins.lock.json.
-  lockFile ? ../../pins.lock.json,
+  # Default suits the vendored layout: <consumer>/.pnix/resolve.nix beside
+  # <consumer>/.pnix/pins.lock.json.
+  lockFile ? ./pins.lock.json,
 
   # name -> pin name. The global "everything follows our nixpkgs" policy; a pin
   # opts out per-name with excludeFollow.

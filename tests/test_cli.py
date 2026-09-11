@@ -27,7 +27,7 @@ def fake_project(tmp_path, monkeypatch):
 def test_update_writes_a_lock(fake_project):
     rc = cli.main(["--project", str(fake_project), "update"])
     assert rc == 0
-    doc = json.loads((fake_project / "pins.lock.json").read_text())
+    doc = json.loads((fake_project / cli.LOCK_NAME).read_text())
     assert doc["pins"]["foo"]["rev"] == "1" * 40
     assert doc["pins"]["foo"]["hash"] == "sha256-AAA"
     # The epoch only. The date string is derived by the resolver, because an
@@ -51,7 +51,7 @@ def test_update_is_idempotent_and_skips_prefetch(fake_project, monkeypatch):
 
 
 def test_update_prunes_pins_no_longer_declared(fake_project):
-    p = fake_project / "pins.lock.json"
+    p = fake_project / cli.LOCK_NAME
     lock.write(p, {"stale": {"type": "github", "rev": "9" * 40}})
     cli.main(["--project", str(fake_project), "update"])
     assert "stale" not in lock.read(p)
@@ -73,7 +73,7 @@ def test_update_carries_bookkeeping_fields_into_the_lock(tmp_path, monkeypatch):
     monkeypatch.setattr("pnix.discover.candidates",
                         lambda roots, attr="pins": [tmp_path / "decl.nix"])
     cli.main(["--project", str(tmp_path), "update"])
-    assert lock.read(tmp_path / "pins.lock.json")["foo"]["excludeFollow"] == ["nixpkgs"]
+    assert lock.read(tmp_path / cli.LOCK_NAME)["foo"]["excludeFollow"] == ["nixpkgs"]
 
 
 def test_look_reports_moved_pins(fake_project, capsys, monkeypatch):
@@ -100,7 +100,7 @@ def test_look_does_not_download(fake_project, capsys, monkeypatch):
 
 def test_look_does_not_write_a_lock(fake_project):
     cli.main(["--project", str(fake_project), "look"])
-    assert not (fake_project / "pins.lock.json").exists()
+    assert not (fake_project / cli.LOCK_NAME).exists()
 
 
 def test_look_is_quiet_when_nothing_moved(fake_project, capsys):
@@ -112,7 +112,7 @@ def test_look_is_quiet_when_nothing_moved(fake_project, capsys):
 
 def test_init_vendors_the_resolver(tmp_path, capsys):
     assert cli.main(["--project", str(tmp_path), "init"]) == 0
-    assert (tmp_path / "nix" / "pins" / "resolve.nix").exists()
+    assert (tmp_path / ".pnix" / "resolve.nix").exists()
     assert "wrote" in capsys.readouterr().out
 
 

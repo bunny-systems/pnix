@@ -1,7 +1,7 @@
 # A passthrough over default.nix, kept only so `nix develop` and `nix build`
 # work for people who expect them.
 #
-# **It has no inputs.** nixpkgs is pinned in pins.lock.json by pnix itself, so
+# **It has no inputs.** nixpkgs is pinned in .pnix/pins.lock.json by pnix itself, so
 # there is nothing for a flake.lock to hold and nothing that needs the flakes
 # feature to resolve. Everything here is also reachable without it:
 #

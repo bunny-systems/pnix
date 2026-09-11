@@ -18,6 +18,6 @@ pkgs.mkShell {
   shellHook = ''
     export UV_PYTHON_DOWNLOADS=never
     export UV_NO_MANAGED_PYTHON=1
-    echo "pnix devshell — nixpkgs $(cat ${./pins.lock.json} | ${pkgs.python314}/bin/python -c 'import json,sys; print(json.load(sys.stdin)["pins"]["nixpkgs"]["rev"][:12])')"
+    echo "pnix devshell — nixpkgs $(cat ${./.pnix/pins.lock.json} | ${pkgs.python314}/bin/python -c 'import json,sys; print(json.load(sys.stdin)["pins"]["nixpkgs"]["rev"][:12])')"
   '';
 }

@@ -53,15 +53,29 @@ def test_the_vendored_resolver_is_not_a_candidate(tmp_path):
     assert [p.name for p in discover.candidates([tmp_path])] == ["decl.nix"]
 
 
-def test_an_adopted_resolver_file_is_scanned_again(tmp_path):
-    """Deleting the marker means the user owns the file; pnix stops making
-    assumptions about it, in both directions."""
+def test_the_vendored_directory_is_skipped_by_location(tmp_path):
+    """`.pnix/` is resolver machinery whatever its contents, so it is pruned by
+    name. Before the move the rule was the marker comment alone, which meant
+    adopting a vendored file put it back in the scan -- and a resolver file is
+    never a declaration site, so that was the wrong direction to fail in."""
     from pnix import vendor
 
     vendor.install(tmp_path)
-    adopted = tmp_path / "nix" / "pins" / "resolve.nix"
+    adopted = tmp_path / ".pnix" / "resolve.nix"
     adopted.write_text('{ pins.mine.type = "git"; }\n')
-    assert adopted.resolve() in discover.candidates([tmp_path])
+    assert discover.candidates([tmp_path]) == []
+
+
+def test_a_marked_resolver_file_outside_the_dot_directory_is_still_skipped(tmp_path):
+    """The marker rule survives the move: it covers a resolver copied somewhere
+    other than `.pnix/`, which `--root` on a parent would otherwise sweep up."""
+    from pnix import vendor
+
+    elsewhere = tmp_path / "vendor" / "resolver"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "resolve.nix").write_text(
+        vendor.MARKER + '\n{ pins.mine.type = "git"; }\n')
+    assert discover.candidates([tmp_path]) == []
 
 
 def test_dot_git_is_skipped(tmp_path):
@@ -81,10 +95,14 @@ def test_a_mention_that_is_not_a_declaration_is_not_a_candidate(tmp_path):
 
 
 def test_a_path_containing_the_attr_name_is_not_a_candidate(tmp_path):
-    """The consumer's own entry point says `import ./nix/pins`. Importing it
+    """A consumer's entry point imports the resolver by path. Importing it
     evaluates the resolver, which reads a lock that does not exist yet on the
-    first `pnix update` -- a bootstrap failure, not just noise."""
+    first `pnix update` -- a bootstrap failure, not just noise. `./.pnix` no
+    longer contains the attr name at all, but a path segment called `pins` is
+    still something a project may legitimately have."""
     (tmp_path / "default.nix").write_text(
+        'import ./.pnix { allFollow = { nixpkgs = "nixpkgs"; }; }\n')
+    (tmp_path / "legacy.nix").write_text(
         'import ./nix/pins { allFollow = { nixpkgs = "nixpkgs"; }; }\n')
     assert discover.candidates([tmp_path]) == []
 

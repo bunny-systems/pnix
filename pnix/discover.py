@@ -21,7 +21,7 @@ from pnix.vendor import MARKER
 # Pruned during the walk, not filtered afterwards: `.git` in a real repo holds
 # thousands of objects, and descending into it to throw the results away is the
 # expensive half.
-SKIP_DIRS = {".git", ".direnv", "result"}
+SKIP_DIRS = {".git", ".direnv", "result", ".pnix"}
 
 SUFFIX = ".nix"
 
@@ -36,7 +36,7 @@ def _pattern(attr: str) -> re.Pattern[bytes]:
     Both halves earn their keep. Without the trailing `[.=]`, every nixpkgs
     package that depends on the Python package `pins` is a candidate. Without
     the leading `.` exclusion, a consumer's own `default.nix` matches on the
-    path `./nix/pins` -- and importing that evaluates the resolver, which reads
+    path `./.pnix` -- and importing that evaluates the resolver, which reads
     a lock that does not exist yet on the very first `pnix update`. That one is
     a bootstrap failure, not just noise.
 

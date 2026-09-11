@@ -45,5 +45,8 @@ def read(path: Path) -> dict[str, dict]:
 
 
 def write(path: Path, pins: dict[str, dict]) -> None:
+    # `pnix update` before `pnix init` is a legitimate order, and .pnix/
+    # may not exist yet.
+    path.parent.mkdir(parents=True, exist_ok=True)
     doc = {"schema": SCHEMA, "pins": {k: pins[k] for k in sorted(pins)}}
     path.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n")

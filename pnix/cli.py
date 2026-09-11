@@ -15,7 +15,9 @@ from pnix import discover, refs, schema, sources, vendor
 from pnix import lock as lock_mod
 from pnix import patches as patches_mod
 
-LOCK_NAME = "pins.lock.json"
+# The lock lives beside the vendored resolver: one directory is the whole
+# of pnix in a consumer repo, so `rm -rf .pnix` uninstalls it.
+LOCK_NAME = vendor.DEST / "pins.lock.json"
 ATTR = "pins"
 
 # Declaration fields that do not affect what gets fetched.
