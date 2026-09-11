@@ -1,0 +1,58 @@
+{
+  "version": 7,
+  "root": "root",
+  "nodes": {
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "child": "child",
+        "viaPath": [
+          "child",
+          "nixpkgs"
+        ],
+        "bare": "bare",
+        "baregit": "baregit"
+      }
+    },
+    "child": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "type": "github",
+        "owner": "o",
+        "repo": "child",
+        "rev": "c0ffee",
+        "narHash": "sha256-Y2g="
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "type": "github",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "deadbeef",
+        "narHash": "sha256-Zm9v"
+      }
+    },
+    "bare": {
+      "flake": false,
+      "locked": {
+        "type": "github",
+        "owner": "o",
+        "repo": "data",
+        "rev": "cafe",
+        "narHash": "sha256-ZGF0"
+      }
+    },
+    "baregit": {
+      "flake": false,
+      "locked": {
+        "type": "git",
+        "url": "https://example.com/thing.git",
+        "rev": "beef",
+        "narHash": "sha256-Z2l0"
+      }
+    }
+  }
+}

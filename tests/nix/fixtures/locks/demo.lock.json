@@ -1,0 +1,54 @@
+{
+  "schema": 3,
+  "pins": {
+    "consumer": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "o",
+      "repo": "consumer",
+      "rev": "1111111111111111111111111111111111111111",
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/o/consumer/archive/1.tar.gz",
+        "hash": "sha256-AAA"
+      }
+    },
+    "dep": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "o",
+      "repo": "dep",
+      "rev": "2222222222222222222222222222222222222222",
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/o/dep/archive/2.tar.gz",
+        "hash": "sha256-BBB"
+      }
+    },
+    "plain": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "o",
+      "repo": "plain",
+      "rev": "3333333333333333333333333333333333333333",
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/o/plain/archive/3.tar.gz",
+        "hash": "sha256-CCC"
+      }
+    },
+    "sub": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "o",
+      "repo": "mono",
+      "rev": "4444444444444444444444444444444444444444",
+      "dir": "sub",
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/o/mono/archive/4.tar.gz",
+        "hash": "sha256-DDD"
+      }
+    }
+  }
+}
