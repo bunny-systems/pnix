@@ -128,26 +128,113 @@ in your diffs, and the reasoning lives with the source in `pnix/resolver/`.
 Every file carries a marker line; delete it and `pnix init` leaves that file
 alone from then on.
 
+### Step by step
+
+**1. Vendor the resolver.** Run it in the project root; `init` is the one
+command that does not search upward for a `.pnix/`, because it is creating one.
+
 ```sh
-pnix --project ~/nixconfig init          # writes .pnix/, commit it
-# …declare some pins…
-pnix --project ~/nixconfig update        # writes .pnix/pins.lock.json, commit it
+cd ~/myrepo
+pnix init                                # writes .pnix/, commit it
 ```
 
-Then in `default.nix`:
+**2. Declare a pin**, in the file that uses it, or in any file at all if you
+have no module system:
+
+```nix
+# pins.nix, or lib/foo.nix, or modules/features/editor.nix
+{
+  pins.nixpkgs = { url = "https://github.com/NixOS/nixpkgs"; ref = "nixos-unstable"; };
+  pins.hjem    = { url = "https://github.com/feel-co/hjem"; };
+}
+```
+
+**3. Lock.** From anywhere inside the repo — `--project` defaults to the nearest
+parent holding a `.pnix/`.
+
+```sh
+pnix update
+```
+
+```
+pnix: resolving 2 pins
+  [1/2] nixpkgs  new       8ce4ef6c
+  [2/2] hjem     new       d248f0e4
+pnix: 2 pins resolved -- 2 new, 3.6s
+```
+
+**4. Use it.** `import ./.pnix` takes an argument set and returns one input per
+pin, shaped like a flake input:
 
 ```nix
 let
-  resolved = import ./.pnix {
+  sources = import ./.pnix {
     allFollow = { nixpkgs = "nixpkgs"; hjem = "hjem"; };
   };
 in
-  # resolved.nixpkgs, resolved.hjem, …
+  # sources.nixpkgs, sources.hjem, …
 ```
 
 > **Do not name that binding `pins`.** A local binding of that name makes the
 > file a declaration candidate, and the collector would force your whole module
 > fixpoint looking for an attribute that is not there.
+
+**5. If — and only if — your declarations live in files a module system also
+evaluates**, declare the option, or every declaration is an undeclared one:
+
+```nix
+{ lib, ... }:
+{
+  options.pins = lib.mkOption {
+    type = lib.types.attrsOf lib.types.unspecified;   # not `raw`: identical
+    default = { };                                    # declarations must merge
+    internal = true;
+  };
+}
+```
+
+A plain repo — `default.nix`, `shell.nix`, a `lib/` tree — needs none of this.
+Tested on four shapes: single file, scattered plain files, `evalModules`, and a
+flake. Only the `evalModules` one needs the option.
+
+**6. Day to day.**
+
+```sh
+pnix look                # what would move; no writes, no downloads
+pnix update              # everything
+pnix update nixpkgs      # one pin; the rest keep their locked entry
+pnix update -v           # also report each download as it starts
+```
+
+Commit `.pnix/` — resolver and lock both. A fresh clone must build with Nix
+alone, without pnix installed.
+
+### Migrating from another pinning tool
+
+Keep the old tool in place until the comparison is clean — that is the point of
+doing it this way.
+
+1. `pnix init`, then translate the old manifest into declarations. Freeze each
+   pin with an explicit `rev` taken from the **old lock**, so upstream drift
+   cannot contaminate the diff.
+2. `pnix update`, then repoint your entry point at `./.pnix`.
+3. Compare `system.build.toplevel.drvPath` for every host, both ways, and only
+   then delete the old tool.
+
+Take the old baseline with whatever features that tool needs — tack needs flakes
+enabled, for instance. The asymmetry is the point of the exercise, not a flaw in
+the measurement.
+
+Three things that are easy to get wrong, all of them observed:
+
+- **A branch the old lock does not record.** Translate from the old *manifest*,
+  not its lock, or a pin tracking a non-default branch silently becomes default.
+- **Entry points other than the obvious one.** A `flake.nix` wrapper that also
+  imported the old resolver has to change too, and it will not fail until you
+  run `nix fmt` or `nix build`.
+- **Scoping `update` to one file.** `--root pins.nix` is right while
+  declarations are central and wrong the moment one moves into the tree: pins it
+  cannot see are **pruned from the lock**.
 
 ---
 
@@ -208,6 +295,27 @@ Two rules, both about **your** module system rather than pnix:
    namespace (`Did you mean 'ids', 'fonts' or 'jobs'?`). In `~/nixconfig` the
    `_`-prefix convention already marks those — declare in non-`_` files, or use
    a sibling `pins.nix`.
+
+**Neither rule applies without a module system.** Tested on four repo shapes:
+
+| repo | works | needs |
+|---|---|---|
+| one `default.nix`, no modules | yes | nothing |
+| plain repo, declarations scattered across files | yes | nothing |
+| `evalModules` (dendritic or otherwise) | yes | `options.pins` |
+| a flake, evaluated purely | yes | nothing |
+
+The last one has one caveat: under a flake's pure evaluation `builtins.getEnv`
+returns empty, so **`PNIX_OVERRIDE` is silently inert** — it produces a normal
+build off the locked rev with no warning. Use `nix eval --impure`,
+`nix-instantiate`, or the `overrides` argument instead.
+
+And do not declare pins in `flake.nix` itself: pnix collects them happily, but
+Nix rejects the flake — `error: flake '…' has an unsupported attribute 'pins'`.
+
+**A pin with no consumer has no natural home.** Declarations live beside what
+uses them, which says nothing about a pin nothing uses. Park those in one file
+and mark them, rather than spreading them somewhere arbitrary.
 
 ---
 
