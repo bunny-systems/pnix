@@ -7,6 +7,9 @@ pkgs.mkShell {
     pkgs.python314
     pkgs.python314Packages.pytest
     pkgs.ruff
+    # tests/test_vendor.py checks the vendored copy is nixfmt-clean; without
+    # this it skips, and the check silently stops happening.
+    pkgs.nixfmt-rfc-style
     pkgs.git
     # uv is a convenience and must never become a requirement:
     #   rm -rf .venv && nix develop -c pytest

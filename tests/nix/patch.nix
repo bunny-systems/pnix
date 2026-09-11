@@ -3,30 +3,44 @@
 let
   mkApply = import ../../pnix/resolver/eval/patch.nix;
 
-  patchPkgs.applyPatches =
-    args:
-    {
-      _isDrv = true;
-      inherit (args) name patches patchFlags;
-      src = args.src;
-    };
+  patchPkgs.applyPatches = args: {
+    _isDrv = true;
+    inherit (args) name patches patchFlags;
+    src = args.src;
+  };
 
   apply = mkApply {
     inherit patchPkgs;
     fetchPatch = p: "/fake/patch/${p.hash or p.path}";
   };
 
-  unpatched = apply { name = "a"; src = "/fake/src"; node = { }; };
+  unpatched = apply {
+    name = "a";
+    src = "/fake/src";
+    node = { };
+  };
   patched = apply {
     name = "b";
     src = "/fake/src";
-    node.patches = [ { kind = "pr"; url = "u"; hash = "H"; } ];
+    node.patches = [
+      {
+        kind = "pr";
+        url = "u";
+        hash = "H";
+      }
+    ];
   };
   importable = apply {
     name = "c";
     src = "/fake/src";
     node = {
-      patches = [ { kind = "pr"; url = "u"; hash = "H"; } ];
+      patches = [
+        {
+          kind = "pr";
+          url = "u";
+          hash = "H";
+        }
+      ];
       importable = true;
     };
   };
@@ -55,7 +69,11 @@ in
   {
     name = "fuzz is forbidden, so a mismatched patch fails the build";
     expr = patched.outPath.patchFlags;
-    expected = [ "-p1" "-F0" "--no-backup-if-mismatch" ];
+    expected = [
+      "-p1"
+      "-F0"
+      "--no-backup-if-mismatch"
+    ];
   }
   {
     name = "a patch is fetched by its hash";
@@ -65,11 +83,17 @@ in
   {
     name = "a local patch is fetched by its path instead";
     expr =
-      builtins.head (apply {
-        name = "d";
-        src = "/fake/src";
-        node.patches = [ { kind = "path"; path = "patches/fix.diff"; } ];
-      }).outPath.patches;
+      builtins.head
+        (apply {
+          name = "d";
+          src = "/fake/src";
+          node.patches = [
+            {
+              kind = "path";
+              path = "patches/fix.diff";
+            }
+          ];
+        }).outPath.patches;
     expected = "/fake/patch/patches/fix.diff";
   }
   {

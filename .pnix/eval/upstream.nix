@@ -1,9 +1,7 @@
 # pnix-managed. delete this line to take ownership; pnix will leave it alone.
 rec {
 
-  resolveSpec =
-    doc: spec:
-    if builtins.isList spec then walkPath doc doc.root spec else spec;
+  resolveSpec = doc: spec: if builtins.isList spec then walkPath doc doc.root spec else spec;
 
   walkPath =
     doc: nodeName: path:

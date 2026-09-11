@@ -40,7 +40,12 @@ let
   # Safe because `fetch` is closed: it is built by `Source.fetch_spec`, never by
   # a user. A field the builtin does not know still fails loudly -- fetchGit
   # answers `input attribute 'x' not supported by scheme 'git'`.
-  rest = f: removeAttrs f [ "kind" "hash" ];
+  rest =
+    f:
+    removeAttrs f [
+      "kind"
+      "hash"
+    ];
 
   primitives = {
     # An archive at a URL, unpacked. The hash is the NAR hash of the unpacked
@@ -83,18 +88,16 @@ primitives
       let
         k = node.fetch.kind or (throw "pnix: lock node has a `fetch` with no `kind`");
         f =
-          primitives.${k} or (throw
-            "pnix: no fetcher for kind '${k}'; known: ${known primitives}. A newer pnix wrote this lock -- re-run `pnix init` to update the vendored resolver."
-          );
+          primitives.${k}
+            or (throw "pnix: no fetcher for kind '${k}'; known: ${known primitives}. A newer pnix wrote this lock -- re-run `pnix init` to update the vendored resolver.");
       in
       f node.fetch
     else
       let
         t = node.type or (throw "pnix: lock node has neither `fetch` nor `type`");
         f =
-          byType.${t} or (throw
-            "pnix: no fetcher for type '${t}'; known kinds: ${known primitives}. Re-run `pnix update`, which writes the `fetch` discriminator this resolver reads."
-          );
+          byType.${t}
+            or (throw "pnix: no fetcher for type '${t}'; known kinds: ${known primitives}. Re-run `pnix update`, which writes the `fetch` discriminator this resolver reads.");
       in
       f node;
 }

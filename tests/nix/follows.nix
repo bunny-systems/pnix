@@ -12,7 +12,11 @@ let
   # Mirrors resolve.nix: a node marked `flake = false` still comes back as a
   # sourceInfo attrset, never a bare store path. Consumers read fields off it.
   evalNode =
-    { lock, nodeName, follows }:
+    {
+      lock,
+      nodeName,
+      follows,
+    }:
     let
       node = lock.nodes.${nodeName};
       sourceInfo = {
@@ -40,12 +44,24 @@ let
   upstreamLock = ./fixtures/locks/upstream/flake.lock;
 
   resolve = mkFollows {
-    allInputs = { nixpkgs = "OURS"; };
-    allFollow = { nixpkgs = "nixpkgs"; };
+    allInputs = {
+      nixpkgs = "OURS";
+    };
+    allFollow = {
+      nixpkgs = "nixpkgs";
+    };
     pins = {
-      follower = { excludeFollow = [ ]; };
-      loner = { excludeFollow = [ "nixpkgs" ]; };
-      pinned = { follows = { nixpkgs = "nixpkgs"; }; };
+      follower = {
+        excludeFollow = [ ];
+      };
+      loner = {
+        excludeFollow = [ "nixpkgs" ];
+      };
+      pinned = {
+        follows = {
+          nixpkgs = "nixpkgs";
+        };
+      };
       empty = { };
     };
     sourceLockFor = _: upstreamLock;
@@ -54,7 +70,9 @@ let
 
   # A pin whose source carries no flake.lock at all.
   resolveNoLock = mkFollows {
-    allInputs = { nixpkgs = "OURS"; };
+    allInputs = {
+      nixpkgs = "OURS";
+    };
     allFollow = { };
     pins.loner = { };
     sourceLockFor = _: null;

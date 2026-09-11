@@ -73,8 +73,18 @@ let
 
   sourceInfoFrom =
     outPath: node:
-    { inherit outPath; }
-    // (if node ? rev then { inherit (node) rev; shortRev = builtins.substring 0 7 node.rev; } else { })
+    {
+      inherit outPath;
+    }
+    // (
+      if node ? rev then
+        {
+          inherit (node) rev;
+          shortRev = builtins.substring 0 7 node.rev;
+        }
+      else
+        { }
+    )
     // (
       if node ? lastModified then
         {
@@ -86,7 +96,12 @@ let
     )
     // (if node ? narHash then { inherit (node) narHash; } else { })
     // (if node ? version then { inherit (node) version; } else { })
-    // (if node ? fetch && node.fetch ? hash && !(node ? narHash) then { narHash = node.fetch.hash; } else { })
+    // (
+      if node ? fetch && node.fetch ? hash && !(node ? narHash) then
+        { narHash = node.fetch.hash; }
+      else
+        { }
+    )
     // (if node ? flake then { inherit (node) flake; } else { });
 
   flakeDirOf = outPath: node: if node ? dir then outPath + ("/" + node.dir) else outPath;
@@ -178,18 +193,16 @@ let
     let
       src = sources.${name};
       patch = patchedSources.${name};
-      extra = builtins.removeAttrs (
-        if builtins.isAttrs fetched.${name} then fetched.${name} else { }
-      ) [ "outPath" ];
+      extra = builtins.removeAttrs (if builtins.isAttrs fetched.${name} then fetched.${name} else { }) [
+        "outPath"
+      ];
       sourceInfo = sourceInfoFrom src (node // extra);
       dir = flakeDirOf src node;
 
       mayProbe = !patch.patched || patch.importable;
     in
     if patch.patched && !patch.importable then
-      builtins.trace
-        "pnix: '${name}' is patched; using it as a source only. Set `importable = true;` if its modules must be imported (costs an import-from-derivation)."
-        sourceInfo
+      builtins.trace "pnix: '${name}' is patched; using it as a source only. Set `importable = true;` if its modules must be imported (costs an import-from-derivation)." sourceInfo
     else if mayProbe && fl.isFlake (sourceInfo // { outPath = dir; }) then
       fl.callFlake {
         inherit sourceInfo dir;

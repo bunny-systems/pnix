@@ -21,7 +21,12 @@ in
   }
   {
     name = "a path pin needs no fetching at all";
-    expr = fetchers.fetch { fetch = { kind = "path"; path = "/tmp"; }; };
+    expr = fetchers.fetch {
+      fetch = {
+        kind = "path";
+        path = "/tmp";
+      };
+    };
     expected = /tmp;
   }
   {
@@ -31,7 +36,13 @@ in
   }
   {
     name = "a fetch block with no kind throws";
-    expr = throws (fetchers.fetch { fetch = { url = "u"; }; });
+    expr = throws (
+      fetchers.fetch {
+        fetch = {
+          url = "u";
+        };
+      }
+    );
     expected = true;
   }
   {
@@ -41,7 +52,12 @@ in
   }
   {
     name = "a node with a type but no fetch says to re-run pnix update";
-    expr = throws (fetchers.fetch { type = "github"; rev = "abc"; });
+    expr = throws (
+      fetchers.fetch {
+        type = "github";
+        rev = "abc";
+      }
+    );
     expected = true;
   }
   {

@@ -25,12 +25,21 @@ in
   }
   {
     name = "identical declarations in two files merge";
-    expr = (run [ (dir + "/a.nix") (dir + "/same.nix") ]).pins.foo.owner;
+    expr =
+      (run [
+        (dir + "/a.nix")
+        (dir + "/same.nix")
+      ]).pins.foo.owner;
     expected = "o";
   }
   {
     name = "differing declarations throw";
-    expr = throws (run [ (dir + "/a.nix") (dir + "/diff.nix") ]).pins;
+    expr =
+      throws
+        (run [
+          (dir + "/a.nix")
+          (dir + "/diff.nix")
+        ]).pins;
     expected = true;
   }
   {
@@ -55,12 +64,21 @@ in
   }
   {
     name = "an unforceable package expression is skipped, not fatal";
-    expr = (run [ (dir + "/pkglike.nix") (dir + "/a.nix") ]).pins.foo.owner;
+    expr =
+      (run [
+        (dir + "/pkglike.nix")
+        (dir + "/a.nix")
+      ]).pins.foo.owner;
     expected = "o";
   }
   {
     name = "and the skip is reported rather than silent";
-    expr = map builtins.baseNameOf (run [ (dir + "/pkglike.nix") (dir + "/a.nix") ]).skipped;
+    expr =
+      map builtins.baseNameOf
+        (run [
+          (dir + "/pkglike.nix")
+          (dir + "/a.nix")
+        ]).skipped;
     expected = [ "pkglike.nix" ];
   }
   {
@@ -71,8 +89,10 @@ in
   {
     name = "a path literal is reported as the path it named, not a store path";
     expr =
-      let p = builtins.head (run [ (dir + "/pathy.nix") ]).pins.withpath.patches;
-      in builtins.isString p && builtins.match ".*/nix/store/.*" p == null;
+      let
+        p = builtins.head (run [ (dir + "/pathy.nix") ]).pins.withpath.patches;
+      in
+      builtins.isString p && builtins.match ".*/nix/store/.*" p == null;
     expected = true;
   }
   {

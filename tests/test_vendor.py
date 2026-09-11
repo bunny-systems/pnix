@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -147,3 +148,20 @@ def test_a_multiline_string_defeats_the_strip(tmp_path, monkeypatch):
     assert vendor._stripped("# gone\nx\n") == "x\n"
     kept = "# kept\ns = \'\'\n# not a comment\n\'\';\n"
     assert vendor._stripped(kept) == kept
+
+
+def test_the_vendored_copy_is_already_formatted(tmp_path):
+    """Otherwise every consumer's `nix fmt` rewrites `.pnix/` and the next
+    `pnix init` rewrites it back -- a loop that churns five files in every diff.
+    Stripping comments could in principle change what nixfmt wants; this is the
+    check that it does not."""
+    nixfmt = shutil.which("nixfmt")
+    if nixfmt is None:
+        pytest.skip("nixfmt not on PATH")
+    unformatted = [
+        p.name for p in vendor.install(tmp_path)
+        if p.suffix == ".nix"
+        and subprocess.run([nixfmt, "--check", str(p)], check=False,
+                           capture_output=True).returncode != 0
+    ]
+    assert not unformatted, f"vendored but not nixfmt-clean: {unformatted}"

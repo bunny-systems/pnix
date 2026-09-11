@@ -12,25 +12,92 @@
 #     git, because they need submodules and forge tarballs do not carry them.
 {
   pins = {
-    nixpkgs = { owner = "NixOS"; repo = "nixpkgs"; };
-    sops-nix = { owner = "Mic92"; repo = "sops-nix"; excludeFollow = [ "nixpkgs" ]; };
-    disko = { owner = "nix-community"; repo = "disko"; excludeFollow = [ "nixpkgs" ]; };
-    finix = { owner = "finix-community"; repo = "finix"; };
-    community-modules = { owner = "finix-community"; repo = "community-modules"; };
-    hjem = { owner = "feel-co"; repo = "hjem"; };
-    hjem-rum = { owner = "snugnug"; repo = "hjem-rum"; };
-    deploy-rs = { owner = "serokell"; repo = "deploy-rs"; };
-    hardware = { owner = "NixOS"; repo = "nixos-hardware"; };
-    impermanence = { owner = "nix-community"; repo = "impermanence"; excludeFollow = [ "nixpkgs" ]; };
-    nix-index-database = { owner = "nix-community"; repo = "nix-index-database"; excludeFollow = [ "nixpkgs" ]; };
-    authentik-nix = { owner = "nix-community"; repo = "authentik-nix"; excludeFollow = [ "nixpkgs" ]; };
-    nix-cachyos-kernel = { owner = "xddxdd"; repo = "nix-cachyos-kernel"; excludeFollow = [ "nixpkgs" ]; };
-    glide = { owner = "glide-browser"; repo = "glide.nix"; };
-    halley = { owner = "N1meses"; repo = "halley"; ref = "feat/flake"; };
-    mango = { owner = "mangowm"; repo = "mango"; excludeFollow = [ "nixpkgs" ]; };
-    noctalia = { owner = "noctalia-dev"; repo = "noctalia"; ref = "cachix"; excludeFollow = [ "nixpkgs" ]; };
-    systems = { owner = "nix-systems"; repo = "default-linux"; };
-    zed-extensions = { owner = "SwornSystems"; repo = "nix-zed-extensions"; };
+    nixpkgs = {
+      owner = "NixOS";
+      repo = "nixpkgs";
+    };
+    sops-nix = {
+      owner = "Mic92";
+      repo = "sops-nix";
+      excludeFollow = [ "nixpkgs" ];
+    };
+    disko = {
+      owner = "nix-community";
+      repo = "disko";
+      excludeFollow = [ "nixpkgs" ];
+    };
+    finix = {
+      owner = "finix-community";
+      repo = "finix";
+    };
+    community-modules = {
+      owner = "finix-community";
+      repo = "community-modules";
+    };
+    hjem = {
+      owner = "feel-co";
+      repo = "hjem";
+    };
+    hjem-rum = {
+      owner = "snugnug";
+      repo = "hjem-rum";
+    };
+    deploy-rs = {
+      owner = "serokell";
+      repo = "deploy-rs";
+    };
+    hardware = {
+      owner = "NixOS";
+      repo = "nixos-hardware";
+    };
+    impermanence = {
+      owner = "nix-community";
+      repo = "impermanence";
+      excludeFollow = [ "nixpkgs" ];
+    };
+    nix-index-database = {
+      owner = "nix-community";
+      repo = "nix-index-database";
+      excludeFollow = [ "nixpkgs" ];
+    };
+    authentik-nix = {
+      owner = "nix-community";
+      repo = "authentik-nix";
+      excludeFollow = [ "nixpkgs" ];
+    };
+    nix-cachyos-kernel = {
+      owner = "xddxdd";
+      repo = "nix-cachyos-kernel";
+      excludeFollow = [ "nixpkgs" ];
+    };
+    glide = {
+      owner = "glide-browser";
+      repo = "glide.nix";
+    };
+    halley = {
+      owner = "N1meses";
+      repo = "halley";
+      ref = "feat/flake";
+    };
+    mango = {
+      owner = "mangowm";
+      repo = "mango";
+      excludeFollow = [ "nixpkgs" ];
+    };
+    noctalia = {
+      owner = "noctalia-dev";
+      repo = "noctalia";
+      ref = "cachix";
+      excludeFollow = [ "nixpkgs" ];
+    };
+    systems = {
+      owner = "nix-systems";
+      repo = "default-linux";
+    };
+    zed-extensions = {
+      owner = "SwornSystems";
+      repo = "nix-zed-extensions";
+    };
 
     niri-nix = {
       type = "git";

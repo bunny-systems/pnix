@@ -13,9 +13,7 @@ rec {
   # The list form is how `follows` edges are encoded, so every real lock
   # containing a follows has it -- a fixture with only the string form leaves
   # this branch untested and unimplemented.
-  resolveSpec =
-    doc: spec:
-    if builtins.isList spec then walkPath doc doc.root spec else spec;
+  resolveSpec = doc: spec: if builtins.isList spec then walkPath doc doc.root spec else spec;
 
   walkPath =
     doc: nodeName: path:

@@ -1,7 +1,12 @@
 # pnix-managed. delete this line to take ownership; pnix will leave it alone.
 { }:
 let
-  rest = f: removeAttrs f [ "kind" "hash" ];
+  rest =
+    f:
+    removeAttrs f [
+      "kind"
+      "hash"
+    ];
 
   primitives = {
     tarball = f: builtins.fetchTarball (rest f // { sha256 = f.hash; });
@@ -27,18 +32,16 @@ primitives
       let
         k = node.fetch.kind or (throw "pnix: lock node has a `fetch` with no `kind`");
         f =
-          primitives.${k} or (throw
-            "pnix: no fetcher for kind '${k}'; known: ${known primitives}. A newer pnix wrote this lock -- re-run `pnix init` to update the vendored resolver."
-          );
+          primitives.${k}
+            or (throw "pnix: no fetcher for kind '${k}'; known: ${known primitives}. A newer pnix wrote this lock -- re-run `pnix init` to update the vendored resolver.");
       in
       f node.fetch
     else
       let
         t = node.type or (throw "pnix: lock node has neither `fetch` nor `type`");
         f =
-          byType.${t} or (throw
-            "pnix: no fetcher for type '${t}'; known kinds: ${known primitives}. Re-run `pnix update`, which writes the `fetch` discriminator this resolver reads."
-          );
+          byType.${t}
+            or (throw "pnix: no fetcher for type '${t}'; known kinds: ${known primitives}. Re-run `pnix update`, which writes the `fetch` discriminator this resolver reads.");
       in
       f node;
 }

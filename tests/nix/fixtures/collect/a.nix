@@ -1,1 +1,7 @@
-{ inputs, ... }: { pins.foo = { type = "github"; owner = "o"; repo = "r"; }; }
+{ inputs, ... }: {
+  pins.foo = {
+    type = "github";
+    owner = "o";
+    repo = "r";
+  };
+}

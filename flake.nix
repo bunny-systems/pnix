@@ -19,10 +19,14 @@
         "x86_64-darwin"
         "aarch64-darwin"
       ];
-      each = f: builtins.listToAttrs (map (system: {
-        name = system;
-        value = f system;
-      }) systems);
+      each =
+        f:
+        builtins.listToAttrs (
+          map (system: {
+            name = system;
+            value = f system;
+          }) systems
+        );
       entry = system: import ./. { inherit system; };
     in
     {

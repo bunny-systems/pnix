@@ -47,17 +47,26 @@
   attr ? "pins",
 }:
 let
-  stub = name: throw "PASS1-FORCED-PIN: a pin declaration read the module argument '${name}'. Pin declarations must be plain data.";
+  stub =
+    name:
+    throw "PASS1-FORCED-PIN: a pin declaration read the module argument '${name}'. Pin declarations must be plain data.";
 
   # Can this file's result be forced at all, and is it an attrset?
   probe =
     path:
     let
       m = import path;
-      value = if builtins.isFunction m then m (builtins.mapAttrs (n: _: stub n) (builtins.functionArgs m)) else m;
+      value =
+        if builtins.isFunction m then m (builtins.mapAttrs (n: _: stub n) (builtins.functionArgs m)) else m;
       forced = builtins.tryEval (builtins.isAttrs value);
     in
-    if forced.success && forced.value then { ok = true; inherit value; } else { ok = false; };
+    if forced.success && forced.value then
+      {
+        ok = true;
+        inherit value;
+      }
+    else
+      { ok = false; };
 
   perFile = map (
     p:
@@ -109,7 +118,13 @@ let
       if a ? ${name} && a.${name}.value != new then
         throw "pnix: '${name}' is declared differently in ${a.${name}.file} and ${entry.file}"
       else
-        a // { ${name} = { value = new; inherit (entry) file; }; }
+        a
+        // {
+          ${name} = {
+            value = new;
+            inherit (entry) file;
+          };
+        }
     ) acc (builtins.attrNames entry.pins);
 
   merged = builtins.foldl' merge { } perFile;

@@ -11,7 +11,9 @@ let
 
   inputs = resolve {
     lockFile = ./fixtures/locks/demo.lock.json;
-    allFollow = { dep = "dep"; };
+    allFollow = {
+      dep = "dep";
+    };
     overrides = {
       consumer = flakes + "/consumer";
       dep = flakes + "/dep";
@@ -24,7 +26,12 @@ in
   {
     name = "every pin in the lock becomes an input";
     expr = builtins.attrNames inputs;
-    expected = [ "consumer" "dep" "plain" "sub" ];
+    expected = [
+      "consumer"
+      "dep"
+      "plain"
+      "sub"
+    ];
   }
   {
     name = "a pinned flake is evaluated";
@@ -68,7 +75,9 @@ in
   }
   {
     name = "a future lock schema is refused";
-    expr = throws (resolve { lockFile = ./fixtures/locks/future.lock.json; });
+    expr = throws (resolve {
+      lockFile = ./fixtures/locks/future.lock.json;
+    });
     expected = true;
   }
 ]

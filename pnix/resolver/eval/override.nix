@@ -27,9 +27,7 @@
 let
   raw = builtins.getEnv var;
 
-  entries = builtins.filter (s: builtins.isString s && s != "") (
-    builtins.split "[[:space:],]+" raw
-  );
+  entries = builtins.filter (s: builtins.isString s && s != "") (builtins.split "[[:space:],]+" raw);
 
   home = builtins.getEnv "HOME";
 

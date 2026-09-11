@@ -135,12 +135,15 @@ rec {
       # sourceInfo after outputs: outPath, rev and lastModified describe the
       # source and an output attribute must not be able to shadow them. This is
       # the order Nix's own call-flake.nix uses.
-      result = outputs // sourceInfo // {
-        outPath = root;
-        inputs = finalInputs;
-        inherit outputs sourceInfo;
-        _type = "flake";
-      };
+      result =
+        outputs
+        // sourceInfo
+        // {
+          outPath = root;
+          inputs = finalInputs;
+          inherit outputs sourceInfo;
+          _type = "flake";
+        };
     in
     result;
 }

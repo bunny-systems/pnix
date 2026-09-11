@@ -68,12 +68,15 @@ rec {
 
       outputs = flake.outputs (finalInputs // { self = result; });
 
-      result = outputs // sourceInfo // {
-        outPath = root;
-        inputs = finalInputs;
-        inherit outputs sourceInfo;
-        _type = "flake";
-      };
+      result =
+        outputs
+        // sourceInfo
+        // {
+          outPath = root;
+          inputs = finalInputs;
+          inherit outputs sourceInfo;
+          _type = "flake";
+        };
     in
     result;
 }
