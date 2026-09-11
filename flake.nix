@@ -1,42 +1,33 @@
+# A passthrough over default.nix, kept only so `nix develop` and `nix build`
+# work for people who expect them.
+#
+# **It has no inputs.** nixpkgs is pinned in pins.lock.json by pnix itself, so
+# there is nothing for a flake.lock to hold and nothing that needs the flakes
+# feature to resolve. Everything here is also reachable without it:
+#
+#   nix-shell                      instead of  nix develop
+#   nix-build -A packages.default  instead of  nix build
 {
-  description = ''
-    initial flake for inotus pinning for pnix
-    TODO: remove and replace with bootstrap or atleast make it
-  '';
-
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
-  };
+  description = "pnix — Nix-native input pinning. See default.nix; this file only forwards to it.";
 
   outputs =
+    { self }:
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      each = f: builtins.listToAttrs (map (system: {
+        name = system;
+        value = f system;
+      }) systems);
+      entry = system: import ./. { inherit system; };
+    in
     {
-      nixpkgs,
-      flake-utils,
-      ...
-    }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = nixpkgs.legacyPackages.${system};
-      in
-      {
-        devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            uv
-            ruff
-            python314
-            python314Packages.pytest
-          ];
-
-          shellHook = ''
-            export UV_PYTHON_DOWNLOADS=never
-            export UV_NO_MANAGED_PYTHON=1
-            echo "pnix DevShell"
-          '';
-        };
-
-        formatter = pkgs.nixfmt-tree;
-      }
-    );
+      packages = each (system: (entry system).packages);
+      devShells = each (system: (entry system).devShells);
+      formatter = each (system: (entry system).formatter);
+    };
 }

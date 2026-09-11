@@ -13,12 +13,33 @@ license = "Apache-2.0"
 [project.scripts]
 pnix = "pnix.cli:main"
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+# Explicit, because nixsrc/ and resolver/ hold no Python and must not be
+# mistaken for packages.
+packages = ["pnix", "pnix.forges", "pnix.sources"]
+
+[tool.setuptools.package-data]
+# Both halves ship inside the package. nixsrc/ is executed in place at lock
+# time; resolver/ is copied OUT into the consumer's repo by `pnix init` and
+# runs on every eval. Neither can live at the repo root: an installed package
+# would not carry it.
+"pnix" = ["nixsrc/*.nix", "resolver/*.nix", "resolver/fetchers/*.nix"]
+
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+  "network: touches the network and a real ~/nixconfig checkout (the gate)",
+]
+# Unit tests must not touch the network: their fixtures are local git repos
+# and local tarballs. Run the gate with `pytest -m network`.
+addopts = "-m 'not network'"
 
 [tool.pyright]
 typeCheckingMode = "standard"
