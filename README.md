@@ -70,7 +70,26 @@ pnix look                    report drift; writes nothing, downloads nothing
 | `--project DIR` | all | project root; default: nearest parent with a `.pnix/` (`init`: the working directory) |
 | `--root DIR` | `update`, `look` | where to scan for declarations; repeatable. A file works too. Default: the project root |
 | `--force` | `init` | overwrite files that lost their pnix marker |
+| `-q`, `--quiet` | `update` | no per-pin progress; warnings and errors still print |
 | `names…` | `update` | update only these pins; the rest keep their locked entry |
+
+`update` reports each pin on stderr as it lands, and announces a download
+before it starts, since that is where the ~20 s of a full run goes:
+
+```
+pnix: resolving 3 pins
+  fetching hjem...
+  fetching systems...
+  [1/3] systems: new -> 31732fcf
+  [2/3] hjem: new -> d248f0e4
+  fetching nixpkgs...
+  [3/3] nixpkgs: new -> 8ce4ef6c
+pnix: 3 pins resolved, 3 changed, 14.5s
+```
+
+Pins resolve concurrently, so the order is whatever finishes first. `-q`
+silences it; warnings and errors still print. stdout stays empty, so
+redirecting it captures only what you asked for.
 
 There is no `add` or `rm`: declare a pin in the file that uses it, then
 `pnix update`. The lock is the only file pnix writes.

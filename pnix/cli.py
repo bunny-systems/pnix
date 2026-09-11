@@ -7,6 +7,8 @@ init    copy the eval-time resolver into this repo
 
 import argparse
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -118,9 +120,71 @@ def _patches_changed(spec: dict, entry: dict) -> bool:
     return False
 
 
+class Progress:
+    """Per-pin progress, on stderr, as each pin finishes.
+
+    `pnix update` on a real config is ~20 s of network with nothing on screen,
+    which is indistinguishable from a hang. Printed as pins *complete* rather
+    than as they start, because the pool runs them concurrently and a list of
+    "starting..." lines in arbitrary order says less than a result does.
+
+    stderr, so `pnix update > somewhere` still captures only what the command
+    is for.
+    """
+
+    def __init__(self, total: int, quiet: bool = False):
+        self.total = total
+        self.quiet = quiet or total == 0
+        self.done = 0
+        self.changed = 0
+        self.started = time.monotonic()
+        self._lock = threading.Lock()
+        if not self.quiet:
+            print(f"pnix: resolving {total} pin{'s' * (total != 1)}",
+                  file=sys.stderr)
+
+    def fetching(self, name: str) -> None:
+        """Announced *before* the download, because that is where the time is.
+
+        Resolving a ref is one ls-remote, under a second. Hashing means pulling
+        the source: nixpkgs alone is ~15 s. Reporting only on completion left
+        that entire window blank, which was the original complaint.
+        """
+        if not self.quiet:
+            with self._lock:
+                print(f"  fetching {name}...", file=sys.stderr)
+
+    def finish(self, name: str, before: dict, after: dict) -> None:
+        old, new = before.get("rev"), after.get("rev")
+        if not before:
+            note = f"new -> {new[:8]}" if new else "new"
+        elif old == new:
+            note = "unchanged"
+        else:
+            note = f"{(old or '?')[:8]} -> {(new or '?')[:8]}"
+        with self._lock:
+            self.done += 1
+            if old != new or not before:
+                self.changed += 1
+            if not self.quiet:
+                print(f"  [{self.done}/{self.total}] {name}: {note}",
+                      file=sys.stderr)
+
+    def summary(self) -> None:
+        if self.quiet:
+            return
+        secs = time.monotonic() - self.started
+        print(
+            f"pnix: {self.done} pin{'s' * (self.done != 1)} resolved, "
+            f"{self.changed} changed, {secs:.1f}s",
+            file=sys.stderr,
+        )
+
+
 def _resolve_all(project: Path, names: list[str], write: bool,
                  roots: list[Path] | None = None,
-                 prefetch: bool = True) -> tuple[dict, dict]:
+                 prefetch: bool = True,
+                 quiet: bool = True) -> tuple[dict, dict]:
     """Resolve every declared pin. Returns (resolved, previous lock contents).
 
     `prefetch=False` is what makes `pnix look` cheap: resolving a ref is one
@@ -152,6 +216,8 @@ def _resolve_all(project: Path, names: list[str], write: bool,
     # Each pin is an independent network round-trip: ~0.86 s for the ls-remote
     # alone, so 21 pins serially is ~18 s. Pool the whole per-pin pipeline
     # (resolve, then prefetch when the rev actually moved).
+    progress = Progress(len(todo), quiet=quiet)
+
     def one(name: str) -> tuple[str, dict]:
         spec = todo[name]
         # `type` is optional when the URL's host says what runs there;
@@ -163,9 +229,11 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         if (_unchanged(spec, prior)
                 and prior.get("rev") == locked.get("rev")
                 and not _patches_changed(spec, prior)):
+            progress.finish(name, prior, prior)
             return name, prior
 
         if prefetch:
+            progress.fetching(name)
             locked.update(src.prefetch(locked))
         for key in CARRIED_FIELDS:
             if key in spec:
@@ -179,6 +247,7 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                 # Resolved after `fetch` so a patch node can be compared
                 # against the source it applies to when `look` reports drift.
                 locked["patches"] = patches_mod.resolve(spec, name, project)
+        progress.finish(name, prior, locked)
         return name, locked
 
     if todo:
@@ -186,6 +255,7 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for name, locked in pool.map(one, list(todo)):
                 result[name] = locked
+    progress.summary()
 
     if write:
         lock_mod.write(lock_path, result)
@@ -194,7 +264,7 @@ def _resolve_all(project: Path, names: list[str], write: bool,
 
 def cmd_update(args) -> int:
     resolved, _ = _resolve_all(find_project(args.project), args.names, write=True,
-                               roots=args.root)
+                               roots=args.root, quiet=args.quiet)
     for name in sorted(resolved):
         for line in patches_mod.applies_to(resolved[name]):
             print(f"pnix: {name}: {line}", file=sys.stderr)
@@ -266,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("names", nargs="*", help="pins to update; default all")
     up.add_argument("--root", action="append", type=Path, default=None,
                     help=root_help)
+    up.add_argument("-q", "--quiet", action="store_true",
+                    help="no per-pin progress; warnings and errors still print")
     up.set_defaults(func=cmd_update)
 
     it = sub.add_parser("init", help="vendor the resolver into this project")

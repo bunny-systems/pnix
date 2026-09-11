@@ -165,3 +165,52 @@ def test_init_works_where_no_project_exists_yet(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert cli.main(["init"]) == 0
     assert (tmp_path / ".pnix" / "default.nix").exists()
+
+
+# --- progress --------------------------------------------------------------
+#
+# `pnix update` on a real config is ~20 s of network. Reporting nothing until
+# it finished was indistinguishable from a hang.
+
+def test_update_reports_each_pin_as_it_lands(fake_project, capsys):
+    cli.main(["--project", str(fake_project), "update"])
+    err = capsys.readouterr().err
+    assert "resolving 1 pin" in err
+    assert "[1/1] foo: new -> " in err
+    assert "1 pin resolved, 1 changed" in err
+
+
+def test_update_announces_the_download_before_it_starts(fake_project, capsys):
+    """The line has to come *before* the slow part or it reports nothing while
+    the time is actually passing."""
+    cli.main(["--project", str(fake_project), "update"])
+    err = capsys.readouterr().err
+    assert err.index("fetching foo") < err.index("[1/1] foo")
+
+
+def test_a_pin_that_did_not_move_says_so_and_is_not_counted(fake_project, capsys):
+    cli.main(["--project", str(fake_project), "update"])
+    capsys.readouterr()
+    cli.main(["--project", str(fake_project), "update"])
+    err = capsys.readouterr().err
+    assert "foo: unchanged" in err
+    assert "0 changed" in err
+    assert "fetching foo" not in err
+
+
+def test_quiet_prints_no_progress(fake_project, capsys):
+    cli.main(["--project", str(fake_project), "update", "-q"])
+    err = capsys.readouterr().err
+    assert "resolving" not in err and "[1/1]" not in err
+
+
+def test_progress_goes_to_stderr_so_stdout_stays_clean(fake_project, capsys):
+    cli.main(["--project", str(fake_project), "update"])
+    assert capsys.readouterr().out == ""
+
+
+def test_look_stays_quiet_by_default(fake_project, capsys):
+    """`look` is a report; its output is the point, so progress would bury it."""
+    cli.main(["--project", str(fake_project), "look"])
+    err = capsys.readouterr().err
+    assert "resolving" not in err
