@@ -1,6 +1,6 @@
 { }:
 let
-  fl = import ../../pnix/resolver/flake.nix;
+  fl = import ../../pnix/resolver/eval/flake.nix;
   dir = ./fixtures/flakes;
   throws = v: !(builtins.tryEval (builtins.deepSeq v true)).success;
 in

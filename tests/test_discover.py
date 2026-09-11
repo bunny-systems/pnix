@@ -61,7 +61,7 @@ def test_the_vendored_directory_is_skipped_by_location(tmp_path):
     from pnix import vendor
 
     vendor.install(tmp_path)
-    adopted = tmp_path / ".pnix" / "resolve.nix"
+    adopted = tmp_path / ".pnix" / "eval" / "resolve.nix"
     adopted.write_text('{ pins.mine.type = "git"; }\n')
     assert discover.candidates([tmp_path]) == []
 

@@ -1,6 +1,6 @@
 { }:
 let
-  date = import ../../pnix/resolver/date.nix;
+  date = import ../../pnix/resolver/eval/date.nix;
 in
 [
   { name = "the epoch itself"; expr = date 0; expected = "19700101000000"; }

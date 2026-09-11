@@ -8,7 +8,7 @@ Two things a Source owes the resolver:
 
 `fetch.kind` is the contract, not `type`. A source type is free to invent
 provenance fields, and adding a forge is a pure Python change, because every
-forge reduces to a primitive that already exists in pnix/resolver/fetchers/.
+forge reduces to a primitive that already exists in pnix/resolver/eval/fetchers.nix.
 `kinds` declares which primitives a source can emit, and
 tests/test_nix.py::test_every_source_kind_has_a_fetcher enforces that they do.
 """

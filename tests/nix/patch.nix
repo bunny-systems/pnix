@@ -1,7 +1,7 @@
 # Patch application, with a fake patchPkgs so no nixpkgs is fetched.
 { }:
 let
-  mkApply = import ../../pnix/resolver/patch.nix;
+  mkApply = import ../../pnix/resolver/eval/patch.nix;
 
   patchPkgs.applyPatches =
     args:

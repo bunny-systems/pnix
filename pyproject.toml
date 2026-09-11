@@ -26,7 +26,7 @@ packages = ["pnix", "pnix.forges", "pnix.sources"]
 # time; resolver/ is copied OUT into the consumer's repo by `pnix init` and
 # runs on every eval. Neither can live at the repo root: an installed package
 # would not carry it.
-"pnix" = ["nixsrc/*.nix", "resolver/*.nix"]
+"pnix" = ["nixsrc/*.nix", "resolver/*.nix", "resolver/eval/*.nix"]
 
 [build-system]
 requires = ["setuptools"]

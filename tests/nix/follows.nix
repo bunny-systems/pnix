@@ -1,6 +1,6 @@
 { }:
 let
-  mkFollows = import ../../pnix/resolver/follows.nix;
+  mkFollows = import ../../pnix/resolver/eval/follows.nix;
   throws = v: !(builtins.tryEval (builtins.deepSeq v true)).success;
 
   # Stands in for resolve.nix's real evalNode: fetch the upstream node, then

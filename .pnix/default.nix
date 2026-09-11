@@ -1,2 +1,2 @@
 # pnix-managed. delete this line to take ownership; pnix will leave it alone.
-args: import ./resolve.nix args
+args: import ./eval/resolve.nix args

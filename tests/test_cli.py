@@ -112,7 +112,7 @@ def test_look_is_quiet_when_nothing_moved(fake_project, capsys):
 
 def test_init_vendors_the_resolver(tmp_path, capsys):
     assert cli.main(["--project", str(tmp_path), "init"]) == 0
-    assert (tmp_path / ".pnix" / "resolve.nix").exists()
+    assert (tmp_path / ".pnix" / "eval" / "resolve.nix").exists()
     assert "wrote" in capsys.readouterr().out
 
 

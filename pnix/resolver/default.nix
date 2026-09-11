@@ -1,2 +1,2 @@
 # `import ./.pnix { }` from the consumer's own default.nix.
-args: import ./resolve.nix args
+args: import ./eval/resolve.nix args

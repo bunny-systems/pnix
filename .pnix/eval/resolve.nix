@@ -1,6 +1,6 @@
 # pnix-managed. delete this line to take ownership; pnix will leave it alone.
 {
-  lockFile ? ./pins.lock.json,
+  lockFile ? ../pins.lock.json,
 
   allFollow ? { },
 

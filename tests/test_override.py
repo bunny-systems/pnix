@@ -21,7 +21,7 @@ def _expr(attrpath: str) -> str:
     name, so `dep.marker` becomes a lookup for the attribute `"dep.marker"`."""
     return textwrap.dedent(f"""
         let
-          inputs = import {ROOT}/pnix/resolver/resolve.nix {{
+          inputs = import {ROOT}/pnix/resolver/eval/resolve.nix {{
             lockFile = {LOCK};
             overrides = {{
               consumer = {FLAKES}/consumer;

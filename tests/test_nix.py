@@ -81,7 +81,7 @@ def test_every_source_kind_has_a_fetcher():
     from pnix import sources
     have = set(_eval_json(
         "builtins.attrNames (import "
-        f"{ROOT}/pnix/resolver/fetchers.nix {{ }}).primitives"))
+        f"{ROOT}/pnix/resolver/eval/fetchers.nix {{ }}).primitives"))
     emitted = {k for src in sources.SOURCES.values() for k in src.kinds}
     assert emitted <= have, f"sources emit kinds with no fetcher: {emitted - have}"
 
@@ -129,7 +129,7 @@ def test_the_two_halves_agree_on_the_lock_schema():
 
     from pnix import lock
 
-    text = (ROOT / "pnix" / "resolver" / "resolve.nix").read_text()
+    text = (ROOT / "pnix" / "resolver" / "eval" / "resolve.nix").read_text()
     m = re.search(r"SCHEMA\s*=\s*(\d+)\s*;", text)
     assert m, "resolve.nix declares no SCHEMA"
     assert int(m.group(1)) == lock.SCHEMA, (

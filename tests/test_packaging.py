@@ -20,8 +20,9 @@ def test_the_lock_time_collector_is_where_the_cli_looks():
 
 
 def test_the_eval_time_resolver_is_where_vendor_looks():
-    assert (vendor.SOURCE / "resolve.nix").is_file()
-    assert (vendor.SOURCE / "fetchers.nix").is_file()
+    assert (vendor.SOURCE / "default.nix").is_file()
+    assert (vendor.SOURCE / "eval" / "resolve.nix").is_file()
+    assert (vendor.SOURCE / "eval" / "fetchers.nix").is_file()
 
 
 def test_package_data_covers_every_shipped_nix_file():

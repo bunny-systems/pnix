@@ -20,12 +20,13 @@ def _eval_json(expr: str):
     return json.loads(out.stdout)
 
 
-def _parse(path: Path, base: Path) -> str:
-    """Nix's parse tree, with absolute path literals made relative.
+def _parse(path: Path, root: Path) -> str:
+    """Nix's parse tree, with absolute path literals made relative to `root`.
 
     Path literals resolve against the file's own directory, so the vendored copy
     and the source disagree on every `./x.nix` -- the one difference that is
-    expected and meaningless.
+    expected and meaningless. Normalised against the tree root rather than each
+    file's parent, because `resolve.nix` reaches up to `../pins.lock.json`.
     """
     out = subprocess.run(
         ["nix-instantiate", "--parse", str(path),
@@ -33,14 +34,14 @@ def _parse(path: Path, base: Path) -> str:
         capture_output=True, text=True, env=dict(os.environ), check=False,
     )
     assert out.returncode == 0, out.stderr
-    return out.stdout.replace(str(base.resolve()), "<DIR>")
+    return out.stdout.replace(str(root.resolve()), "<DIR>")
 
 
 def test_install_writes_the_eval_time_files(tmp_path):
     written = vendor.install(tmp_path)
     names = {p.name for p in written}
     assert {"resolve.nix", "flake.nix", "follows.nix", "upstream.nix"} <= names
-    assert (tmp_path / ".pnix" / "fetchers.nix").exists()
+    assert (tmp_path / ".pnix" / "eval" / "fetchers.nix").exists()
 
 
 def test_fetchers_are_primitives_not_source_types(tmp_path):
@@ -49,7 +50,7 @@ def test_fetchers_are_primitives_not_source_types(tmp_path):
     a file each implied that a new forge needed a new one, which is the opposite
     of what the dispatch is for."""
     vendor.install(tmp_path)
-    have = _eval_json(f"builtins.attrNames (import {tmp_path}/.pnix/fetchers.nix "
+    have = _eval_json(f"builtins.attrNames (import {tmp_path}/.pnix/eval/fetchers.nix "
                       "{ }).primitives")
     assert set(have) == {"tarball", "file", "git", "path"}
 
@@ -82,13 +83,13 @@ def test_written_files_carry_the_marker(tmp_path):
 def test_reinstall_is_idempotent(tmp_path):
     vendor.install(tmp_path)
     vendor.install(tmp_path)          # must not raise
-    target = tmp_path / ".pnix" / "resolve.nix"
+    target = tmp_path / ".pnix" / "eval" / "resolve.nix"
     assert vendor.MARKER in target.read_text()
 
 
 def test_refuses_to_clobber_a_file_that_lost_its_marker(tmp_path):
     vendor.install(tmp_path)
-    target = tmp_path / ".pnix" / "resolve.nix"
+    target = tmp_path / ".pnix" / "eval" / "resolve.nix"
     target.write_text("# mine now\n")
     with pytest.raises(vendor.VendorError) as e:
         vendor.install(tmp_path)
@@ -98,7 +99,7 @@ def test_refuses_to_clobber_a_file_that_lost_its_marker(tmp_path):
 
 def test_force_overwrites_anyway(tmp_path):
     vendor.install(tmp_path)
-    target = tmp_path / ".pnix" / "resolve.nix"
+    target = tmp_path / ".pnix" / "eval" / "resolve.nix"
     target.write_text("# mine now\n")
     vendor.install(tmp_path, force=True)
     assert vendor.MARKER in target.read_text()
@@ -133,9 +134,10 @@ def test_the_marker_survives_stripping(tmp_path):
 def test_stripping_preserves_the_parse_tree(tmp_path):
     """Comments do not appear in Nix's AST, so a strip that changed behaviour
     would change the parse. This is what licenses stripping without a lexer."""
+    root = tmp_path / ".pnix"
     for dst in vendor.install(tmp_path):
-        src = RESOLVER / dst.relative_to(tmp_path / ".pnix")
-        assert _parse(dst, dst.parent) == _parse(src, src.parent), dst.name
+        src = RESOLVER / dst.relative_to(root)
+        assert _parse(dst, root) == _parse(src, RESOLVER), dst.name
 
 
 def test_a_multiline_string_defeats_the_strip(tmp_path, monkeypatch):

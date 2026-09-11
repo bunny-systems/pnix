@@ -5,7 +5,7 @@
 # is the real code path.
 { }:
 let
-  resolve = import ../../pnix/resolver/resolve.nix;
+  resolve = import ../../pnix/resolver/eval/resolve.nix;
   flakes = ./fixtures/flakes;
   throws = v: !(builtins.tryEval (builtins.deepSeq v true)).success;
 
