@@ -62,3 +62,58 @@ def test_file_and_tarball_disagree_on_purpose(local_tarball):
     nar, _ = prefetch.tarball(f"file://{local_tarball}")
     flat = prefetch.file(f"file://{local_tarball}")
     assert nar != flat
+
+
+# --- User-Agent ------------------------------------------------------------
+
+def test_every_request_carries_a_user_agent(monkeypatch, tmp_path):
+    """Forge instances commonly block `Python-urllib/*` as a scraper. One bare
+    `urlopen` in `tarball` was enough to make every fetch from a self-hosted
+    Forgejo fail with `HTTP 403: Forbidden` on a URL that curl and Nix both
+    fetched fine -- while the other two call sites set a header and looked
+    correct. Checked on what actually reaches urlopen, per entry point."""
+    from pnix import USER_AGENT
+
+    seen = []
+
+    class Resp:
+        url = "https://example.invalid/x"
+
+        def read(self):
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen.append(req)
+        return Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(prefetch, "_hash_local", lambda *a: "sha256-X")
+
+    prefetch.resolve_redirect("https://example.invalid/x")
+    prefetch.tarball("https://example.invalid/x.tar.gz")
+
+    assert len(seen) == 2
+    for req in seen:
+        assert req.get_header("User-agent") == USER_AGENT
+
+
+def test_the_user_agent_names_the_tool_and_its_version():
+    from pnix import USER_AGENT, __version__
+
+    assert USER_AGENT == f"pnix/{__version__}"
+    assert "urllib" not in USER_AGENT
+
+
+def test_the_forge_client_shares_the_same_user_agent():
+    """Two constants meant two things to keep in step, and the one that was
+    missed was the one nobody had a test for."""
+    from pnix import USER_AGENT
+    from pnix.forges import http
+
+    assert http.USER_AGENT == USER_AGENT

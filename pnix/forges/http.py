@@ -10,9 +10,9 @@ import json
 import urllib.error
 import urllib.request
 
+from pnix import USER_AGENT
 from pnix.forges.base import ForgeError
 
-USER_AGENT = "pnix"
 TIMEOUT = 45
 
 

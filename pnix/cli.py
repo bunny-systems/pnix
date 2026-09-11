@@ -154,7 +154,9 @@ def _resolve_all(project: Path, names: list[str], write: bool,
     # (resolve, then prefetch when the rev actually moved).
     def one(name: str) -> tuple[str, dict]:
         spec = todo[name]
-        src = sources.get(spec.get("type", schema.DEFAULT_TYPE))
+        # `type` is optional when the URL's host says what runs there;
+        # schema.validate has already refused anything it could not settle.
+        src = sources.get(schema.type_of(spec))
         locked = src.resolve(spec)
 
         prior = existing.get(name, {})

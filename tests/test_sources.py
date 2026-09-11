@@ -17,16 +17,20 @@ def test_unknown_type_raises_listing_known_types():
 def test_github_resolve_produces_locked_node_without_hash(monkeypatch):
     monkeypatch.setattr("pnix.refs.resolve", lambda url, ref=None: "b" * 40)
     src = sources.get("github")
-    locked = src.resolve({"type": "github", "owner": "NixOS",
-                          "repo": "nixpkgs", "ref": "nixos-unstable"})
+    locked = src.resolve({"type": "github",
+                          "url": "https://github.com/NixOS/nixpkgs",
+                          "ref": "nixos-unstable"})
+    # host/owner/repo are derived from the url and kept as provenance: the
+    # declaration says where the thing is, the lock records what that meant.
     assert locked == {
         "type": "github", "host": "github.com", "owner": "NixOS",
-        "repo": "nixpkgs", "ref": "nixos-unstable", "rev": "b" * 40,
+        "repo": "nixpkgs", "url": "https://github.com/NixOS/nixpkgs",
+        "ref": "nixos-unstable", "rev": "b" * 40,
     }
     assert "hash" not in locked
 
 
-def test_github_honours_custom_host(monkeypatch):
+def test_a_self_hosted_instance_is_read_off_the_url(monkeypatch):
     seen = {}
 
     def fake(url, ref=None):
@@ -35,8 +39,7 @@ def test_github_honours_custom_host(monkeypatch):
 
     monkeypatch.setattr("pnix.refs.resolve", fake)
     sources.get("github").resolve(
-        {"type": "github", "host": "forgejo.nimeses.com",
-         "owner": "n", "repo": "r"})
+        {"type": "github", "url": "https://forgejo.nimeses.com/n/r"})
     assert seen["url"] == "https://forgejo.nimeses.com/n/r"
 
 
@@ -129,7 +132,7 @@ def test_every_forge_resolves_through_ls_remote(type_, monkeypatch):
 
     monkeypatch.setattr("pnix.refs.resolve", fake)
     locked = sources.get(type_).resolve(
-        {"type": type_, "owner": "o", "repo": "r", "ref": "main"})
+        {"type": type_, "url": "https://example.com/o/r", "ref": "main"})
     assert locked["rev"] == "a" * 40
     assert locked["ref"] == "main"
     assert seen["url"].endswith("/o/r")
@@ -138,7 +141,7 @@ def test_every_forge_resolves_through_ls_remote(type_, monkeypatch):
 def test_a_custom_host_reaches_both_urls(monkeypatch):
     monkeypatch.setattr("pnix.refs.resolve", lambda url, ref=None: "b" * 40)
     src = sources.get("forgejo")
-    locked = src.resolve({"host": "forgejo.nimeses.com", "owner": "n", "repo": "x"})
+    locked = src.resolve({"url": "https://forgejo.nimeses.com/n/x"})
     assert locked["host"] == "forgejo.nimeses.com"
     assert src.archive_url(locked).startswith("https://forgejo.nimeses.com/n/x/archive/")
 

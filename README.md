@@ -142,8 +142,8 @@ or as a plain sibling data file, which needs no module system at all:
 ```nix
 # modules/builders/pins.nix
 {
-  pins.nixpkgs = { owner = "NixOS"; repo = "nixpkgs"; ref = "nixos-unstable"; };
-  pins.hjem    = { owner = "feel-co"; repo = "hjem"; };
+  pins.nixpkgs = { url = "https://github.com/NixOS/nixpkgs"; ref = "nixos-unstable"; };
+  pins.hjem    = { url = "https://github.com/feel-co/hjem"; };
 }
 ```
 
@@ -182,40 +182,62 @@ Two rules, both about **your** module system rather than pnix:
 
 ## Source types
 
-Ten of them. `type` defaults to `github`.
+Ten of them. **A pin says where the thing is; `type` says how to get it, and
+only when the URL cannot settle it.** `github.com`, `codeberg.org`, `gitlab.com`
+and `git.sr.ht` are known hosts, so those need no `type` at all.
 
 ```nix
-pins.a = { owner = "NixOS"; repo = "nixpkgs"; };                        # github
-pins.b = { type = "forgejo"; owner = "n"; repo = "r";
-           host = "forgejo.nimeses.com"; };                             # or gitea
-pins.c = { type = "gitlab"; owner = "o"; repo = "r"; };
-pins.d = { type = "sourcehut"; owner = "~sircmpwn"; repo = "scdoc"; };  # ~ is yours to write
-pins.e = { type = "git"; url = "https://…/r.git"; submodules = true; };
-pins.f = { type = "tarball"; url = "https://…/src.tar.gz"; };
-pins.g = { type = "file"; url = "https://…/thing.json"; };
-pins.h = { type = "channel"; channel = "nixos-unstable"; };
-pins.i = { type = "path"; path = "/home/me/checkout"; };                # warns; see Overrides
+pins.a = { url = "https://github.com/NixOS/nixpkgs"; };
+pins.b = { url = "https://codeberg.org/n/r"; };
+pins.c = { url = "https://gitlab.com/o/r"; };
+pins.d = { url = "https://git.sr.ht/~sircmpwn/scdoc"; };
+pins.e = { type = "forgejo"; url = "https://forgejo.example.com/n/r"; };  # self-hosted
+pins.f = { type = "git"; url = "https://…/r"; submodules = true; };
+pins.g = { type = "tarball"; url = "https://…/src.tar.gz"; };
+pins.h = { type = "file"; url = "https://…/thing.json"; };
+pins.i = { type = "channel"; channel = "nixos-unstable"; };
+pins.j = { type = "path"; path = "/home/me/checkout"; };                # warns; see Overrides
+```
+
+`owner`, `repo` and `host` are **not** declaration fields. They said the same
+thing the URL says, in a second place that could disagree with it. They are
+derived and kept in the lock as provenance, which is where `pnix look` reads
+them from.
+
+An unknown host with no `type` is refused rather than guessed — assuming a
+self-hosted domain runs Forgejo is how you get a 404 at lock time:
+
+```
+pins.nix: pin 'x' has no `type` and its host is not one pnix knows, so it
+cannot tell what runs there. Add `type`: forgejo, github, gitlab, sourcehut,
+or `git` for a plain clone.
 ```
 
 | type | needs | notes |
 |---|---|---|
-| `github` | `owner`, `repo` | `host` for GitHub Enterprise |
-| `forgejo` / `gitea` | `owner`, `repo` | `host` defaults to `codeberg.org` |
-| `gitlab` | `owner`, `repo` | no PR API — see Patches |
-| `sourcehut` | `owner`, `repo` | `owner` includes the leading `~` |
+| `github` | `url` | inferred for `github.com` |
+| `forgejo` / `gitea` | `url` | inferred for `codeberg.org`; state it for a self-hosted instance |
+| `gitlab` | `url` | inferred for `gitlab.com`; no PR API — see Patches |
+| `sourcehut` | `url` | inferred for `git.sr.ht`; the `~` is part of the URL |
 | `git` | `url` | **the only one that carries submodules**; no hash stored, the rev is the commitment |
 | `tarball` | `url` | redirects followed at lock time |
 | `file` | `url` | not unpacked; flat hash |
 | `channel` | `channel` | follows `channels.nixos.org`; records a `version` |
 | `path` | `path` | no hash, machine-local — use an override instead |
 
-Forge tarballs do **not** carry submodules. If a pin needs them, use `type = "git"`.
+Forge tarballs do **not** carry submodules, and asking for one is an error
+rather than a silent omission:
+
+```
+pins.nix: pin 'hyprland' sets submodules, which a 'github' archive cannot
+carry. Add `type = "git"` to clone it instead.
+```
 
 ### Common extras
 
 ```nix
 pins.x = {
-  owner = "o"; repo = "r";
+  url = "https://github.com/o/r";
   dir = "nix";          # the flake.nix lives in a subdirectory
   flake = false;        # fetch it, do not evaluate it — source only
 
@@ -248,12 +270,12 @@ ambiguous; `rev` may accompany any of them — it pins exactly while the other
 records what was being tracked.
 
 ```nix
-pins.a = { owner = "o"; repo = "r"; };                        # default branch
-pins.b = { owner = "o"; repo = "r"; ref = "main"; };          # a branch
-pins.c = { owner = "o"; repo = "r"; ref = "refs/heads/x"; };  # fully qualified
-pins.d = { owner = "o"; repo = "r"; tag = "v1.2.3"; };        # exactly that tag
-pins.e = { owner = "o"; repo = "r"; release = "^1.2"; };      # newest matching tag
-pins.f = { owner = "o"; repo = "r"; rev = "abc123…"; };       # frozen
+pins.a = { url = "https://github.com/o/r"; };                        # default branch
+pins.b = { url = "https://github.com/o/r"; ref = "main"; };          # a branch
+pins.c = { url = "https://github.com/o/r"; ref = "refs/heads/x"; };  # fully qualified
+pins.d = { url = "https://github.com/o/r"; tag = "v1.2.3"; };        # exactly that tag
+pins.e = { url = "https://github.com/o/r"; release = "^1.2"; };      # newest matching tag
+pins.f = { url = "https://github.com/o/r"; rev = "abc123…"; };       # frozen
 ```
 
 `release` ranges: `*`, `^1.2`, `~1.9`, `>=1.2`, `>1`, `<=2`, `<2.0.0`, or a bare
@@ -280,8 +302,8 @@ import ./.pnix { allFollow = { nixpkgs = "nixpkgs"; hjem = "hjem"; }; }
 pin opts out per name, or overrides one explicitly:
 
 ```nix
-pins.sops-nix = { owner = "Mic92"; repo = "sops-nix"; excludeFollow = [ "nixpkgs" ]; };
-pins.thing    = { owner = "o"; repo = "r"; follows = { nixpkgs = "nixpkgs-stable"; }; };
+pins.sops-nix = { url = "https://github.com/Mic92/sops-nix"; excludeFollow = [ "nixpkgs" ]; };
+pins.thing    = { url = "https://github.com/o/r"; follows = { nixpkgs = "nixpkgs-stable"; }; };
 ```
 
 A sub-input resolves in four steps:
@@ -301,7 +323,7 @@ opted out.
 
 ```nix
 pins.finit = {
-  owner = "finit-project"; repo = "finit";
+  url = "https://github.com/finit-project/finit";
   patches = [
     { pr = 181; }                       # tracked to its head and base
     { commit = "abc123…"; }             # one commit's diff
@@ -317,21 +339,27 @@ elsewhere still finds them.
 
 ### A patch from a different repo
 
-For a pin fetched from a mirror whose pull requests live upstream — and the only
-way a `git`-type pin can track a PR at all, since it has no `owner`/`repo`:
+A patch does not have to live in the repo it applies to. `repo` names the one
+whose pull requests you mean, as a url — same shape as a pin:
 
 ```nix
 pins.nixarr = {
-  type = "git";
-  url = "https://forgejo.nimeses.com/NixOS/nixarr.git";
+  type = "forgejo";
+  url = "https://forgejo.nimeses.com/NixOS/nixarr";       # your mirror
   patches = [
-    { pr = 42; owner = "rasmus-kirk"; repo = "nixarr"; forge = "github"; }
+    { pr = 42; repo = "https://github.com/rasmus-kirk/nixarr"; }   # upstream
   ];
 };
 ```
 
+Its host settles the forge, so `forge` is only needed when *that* host is
+self-hosted too. It is also how a `git` pin tracks a PR: `git` means "pnix knows
+nothing about this host", so the patch supplies a repo it does know.
+
+`owner` and `host` are not patch fields — `repo` says both.
+
 PR tracking works on **github** and **forgejo/gitea** only. GitLab and sourcehut
-pins are refused for `{ pr = …; }` — use `commit` or `url`.
+are refused for `{ pr = …; }` — use `commit` or `url`.
 
 ### Two things that will bite
 
@@ -359,7 +387,7 @@ Use it as `src = inputs.finit;`, then `overrideAttrs` or an overlay.
 If you need its *modules*, you must realise it first:
 
 ```nix
-pins.thing = { owner = "o"; repo = "r"; patches = [ … ]; importable = true; };
+pins.thing = { url = "https://github.com/o/r"; patches = [ … ]; importable = true; };
 ```
 
 That costs an IFD: it stalls the rebuild while it builds and fails outright

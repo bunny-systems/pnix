@@ -6,6 +6,7 @@
       "host": "github.com",
       "owner": "NixOS",
       "repo": "nixpkgs",
+      "url": "https://github.com/NixOS/nixpkgs",
       "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
       "ref": "nixos-unstable",
       "hash": "sha256-xB8mKMOx1IA9vTDNLmJZ6n4wCMq/cuWBBOzGCRnqxrU=",

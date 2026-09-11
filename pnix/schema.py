@@ -6,11 +6,10 @@ before any nixpkgs is fetched. Validating here also means a typo is reported
 with the file that contains it, which is what a user actually needs.
 """
 
+from pnix import urls
+
 FIELDS: dict[str, type] = {
     "type": str,
-    "owner": str,
-    "repo": str,
-    "host": str,
     "url": str,
     "path": str,
     "ref": str,
@@ -43,11 +42,11 @@ PATCH_KEYS = ("pr", "commit", "url")
 FORGE_NAMES = ("github", "forgejo", "gitea")
 
 REQUIRED: dict[str, tuple[str, ...]] = {
-    "github": ("owner", "repo"),
-    "forgejo": ("owner", "repo"),
-    "gitea": ("owner", "repo"),
-    "gitlab": ("owner", "repo"),
-    "sourcehut": ("owner", "repo"),
+    "github": ("url",),
+    "forgejo": ("url",),
+    "gitea": ("url",),
+    "gitlab": ("url",),
+    "sourcehut": ("url",),
     "git": ("url",),
     "tarball": ("url",),
     "file": ("url",),
@@ -59,7 +58,23 @@ REQUIRED: dict[str, tuple[str, ...]] = {
 # resolved against them. Refusing beats guessing an endpoint shape.
 NO_PR_API = ("gitlab", "sourcehut", "git", "tarball", "file", "channel", "path")
 
-DEFAULT_TYPE = "github"
+# Options fetchGit accepts and a forge archive cannot honour. Asking for one
+# on a tarball pin is not a warning: the pin would fetch, evaluate, and be
+# quietly missing the submodule.
+GIT_ONLY = ("submodules", "shallow", "lfs", "exportIgnore")
+
+
+def type_of(spec: dict) -> str | None:
+    """The source type for a declaration: stated, or read off the URL's host.
+
+    None means neither worked -- an unknown host with no `type`. Guessing which
+    software a self-hosted domain runs is how you get a 404 at lock time.
+    """
+    stated = spec.get("type")
+    if stated:
+        return stated
+    url = spec.get("url")
+    return urls.infer_type(url) if isinstance(url, str) else None
 
 
 class SchemaError(Exception):
@@ -113,12 +128,43 @@ def validate(pins: dict, provenance: dict) -> None:
 
         problems.extend(_patch_problems(name, spec, where))
 
-        kind = spec.get("type", DEFAULT_TYPE)
+        kind = type_of(spec)
+        if kind is None:
+            known = ", ".join(sorted(set(urls.HOSTS.values())))
+            problems.append(
+                f"{where}: pin '{name}' has no `type` and its host is not one "
+                f"pnix knows, so it cannot tell what runs there. Add `type`: "
+                f"{known}, or `git` for a plain clone."
+            )
+            continue
+        if kind not in REQUIRED:
+            problems.append(
+                f"{where}: pin '{name}' has unknown type '{kind}'. "
+                f"known types: {', '.join(sorted(REQUIRED))}"
+            )
+            continue
+
         for field in REQUIRED.get(kind, ()):
             if not spec.get(field):
                 problems.append(
                     f"{where}: pin '{name}' is type '{kind}' and needs '{field}'"
                 )
+
+        if kind != "git":
+            asked = [f for f in GIT_ONLY if spec.get(f)]
+            if asked:
+                problems.append(
+                    f"{where}: pin '{name}' sets {', '.join(asked)}, which a "
+                    f"'{kind}' archive cannot carry. Add `type = \"git\"` to "
+                    f"clone it instead."
+                )
+
+        if isinstance(spec.get("url"), str) and kind in ("github", "forgejo", "gitea", "gitlab",
+                                        "sourcehut", "git"):
+            try:
+                urls.parse(spec["url"])
+            except urls.UrlError as e:
+                problems.append(f"{where}: pin '{name}': {e}")
 
     if problems:
         raise SchemaError("\n".join(problems))
@@ -133,12 +179,16 @@ def _patch_problems(name: str, spec: dict, where: str) -> list[str]:
     if spec.get("importable") and not patches:
         out.append(f"{where}: pin '{name}' sets 'importable' but has no patches")
 
-    kind = spec.get("type", DEFAULT_TYPE)
+    kind = type_of(spec) or ""
     for i, entry in enumerate(patches):
         at = f"{where}: pin '{name}' patch [{i}]"
-        # A patch may name its own repo and forge, which is how a pin with no
-        # owner/repo -- or one mirrored from elsewhere -- tracks a PR.
-        names_own_source = isinstance(entry, dict) and "forge" in entry
+        # A patch may name its own repo and forge, which is how a pin mirrored
+        # from elsewhere tracks a PR on the upstream it was mirrored from.
+        names_own_source = isinstance(entry, dict) and (
+            "forge" in entry
+            or (isinstance(entry.get("repo"), str)
+                and urls.infer_type(entry["repo"]) not in (None, *NO_PR_API))
+        )
         if (isinstance(entry, dict) and "pr" in entry and kind in NO_PR_API
                 and not spec.get("forge") and not names_own_source):
             out.append(
@@ -153,9 +203,21 @@ def _patch_problems(name: str, spec: dict, where: str) -> list[str]:
             out.append(f"{at}: must be an attrset or a path, got "
                        f"{type(entry).__name__}")
             continue
-        for key in ("owner", "repo", "host", "forge"):
+        for key in ("repo", "forge"):
             if key in entry and not isinstance(entry[key], str):
                 out.append(f"{at}: '{key}' must be a string")
+        for gone in ("owner", "host"):
+            if gone in entry:
+                out.append(
+                    f"{at}: '{gone}' is not a patch field. Name the repo the "
+                    f'pull request lives in as a url: `repo = '
+                    f'"https://host/owner/name";`'
+                )
+        if isinstance(entry.get("repo"), str):
+            try:
+                urls.parse(entry["repo"])
+            except urls.UrlError as e:
+                out.append(f"{at}: {e}")
         present = [k for k in PATCH_KEYS if k in entry]
         if len(present) != 1:
             out.append(

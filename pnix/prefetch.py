@@ -21,6 +21,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+from pnix import USER_AGENT
+
 # Every nix invocation carries this so pnix never depends on the user's
 # experimental-features setting, in either direction.
 NO_EXPERIMENTAL = ["--option", "experimental-features", ""]
@@ -41,6 +43,17 @@ def to_sri(base32: str) -> str:
     return proc.stdout.strip()
 
 
+def _request(url: str, method: str = "GET") -> urllib.request.Request:
+    """Every outbound request, so none can forget the User-Agent.
+
+    `prefetch.tarball` used a bare `urlopen` while the other two call sites set
+    one, and a Forgejo instance that blocks `Python-urllib/*` turned that into
+    `HTTP 403: Forbidden` on a URL curl and Nix both fetched fine.
+    """
+    return urllib.request.Request(url, method=method,
+                                  headers={"User-Agent": USER_AGENT})
+
+
 def resolve_redirect(url: str) -> str:
     """Follow redirects and return the URL actually served.
 
@@ -54,8 +67,7 @@ def resolve_redirect(url: str) -> str:
     HEAD rather than GET: nothing is downloaded here, and the caller hashes the
     resolved URL afterwards.
     """
-    req = urllib.request.Request(url, method="HEAD",
-                                 headers={"User-Agent": "pnix"})
+    req = _request(url, method="HEAD")
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.url
@@ -141,7 +153,7 @@ def tarball(url: str) -> tuple[str, int | None]:
     URL, since the hash is of the unpacked tree.
     """
     try:
-        with urllib.request.urlopen(url, timeout=120) as resp:
+        with urllib.request.urlopen(_request(url), timeout=120) as resp:
             blob = resp.read()
     except OSError as err:
         raise PrefetchError(f"fetching {url}: {err}") from err

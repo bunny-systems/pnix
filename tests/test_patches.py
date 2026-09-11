@@ -42,7 +42,7 @@ def fake(monkeypatch):
     return forge
 
 
-SPEC = {"type": "github", "host": "github.com", "owner": "o", "repo": "r"}
+SPEC = {"type": "github", "host": "github.com", "url": "https://github.com/o/r"}
 
 
 def test_a_pr_resolves_to_an_immutable_compare_diff(fake, tmp_path):
@@ -94,7 +94,7 @@ def test_a_missing_local_patch_is_refused(fake, tmp_path):
 
 def test_an_unknown_host_asks_which_forge_it_runs(monkeypatch, tmp_path):
     monkeypatch.setattr("pnix.prefetch.file", lambda url: "sha256-PATCH")
-    spec = dict(SPEC, host="git.example.invalid")
+    spec = {"type": "forgejo", "url": "https://git.example.invalid/o/r"}
     with pytest.raises(patches.PatchError) as e:
         patches.resolve_one({"pr": 1}, spec, "p", tmp_path)
     assert "cannot tell which forge" in str(e.value)
@@ -160,7 +160,8 @@ def test_drift_reports_new_commits_and_a_rebase(monkeypatch):
     forge = FakeForge(pull=Pull(head="n" * 40, base="m" * 40,
                                 state="open", merged=False))
     monkeypatch.setattr("pnix.forges.get", lambda name: forge)
-    node = {"owner": "o", "repo": "r", "host": "github.com",
+    node = {"url": "https://github.com/o/r", "host": "github.com",
+            "owner": "o", "repo": "r",
             "patches": [{"kind": "pr", "forge": "github", "number": 7,
                          "head": "h" * 40, "base": "b" * 40, "merged": False}]}
     lines = patches.drift(node)
@@ -172,7 +173,7 @@ def test_drift_reports_a_merge_that_happened_after_locking(monkeypatch):
     forge = FakeForge(pull=Pull(head="h" * 40, base="b" * 40,
                                 state="closed", merged=True))
     monkeypatch.setattr("pnix.forges.get", lambda name: forge)
-    node = {"owner": "o", "repo": "r",
+    node = {"url": "https://github.com/o/r",
             "patches": [{"kind": "pr", "forge": "github", "number": 7,
                          "head": "h" * 40, "base": "b" * 40, "merged": False}]}
     assert "merged since you locked" in patches.drift(node)[0]
@@ -180,7 +181,7 @@ def test_drift_reports_a_merge_that_happened_after_locking(monkeypatch):
 
 def test_drift_survives_a_forge_it_cannot_reach(monkeypatch):
     monkeypatch.setattr("pnix.forges.get", lambda name: FakeForge(fail=True))
-    node = {"owner": "o", "repo": "r",
+    node = {"url": "https://github.com/o/r",
             "patches": [{"kind": "pr", "forge": "github", "number": 7,
                          "head": "h" * 40, "base": "b" * 40}]}
     assert "could not check" in patches.drift(node)[0]
@@ -217,37 +218,38 @@ def test_a_patch_may_name_its_own_repo(monkeypatch, tmp_path):
     monkeypatch.setattr("pnix.forges.get", lambda name: Recording())
     monkeypatch.setattr("pnix.prefetch.file", lambda url: "sha256-PATCH")
 
-    mirrored = {"type": "forgejo", "host": "forgejo.nimeses.com",
-                "owner": "NixOS", "repo": "nixarr"}
+    mirrored = {"type": "forgejo",
+                "url": "https://forgejo.nimeses.com/NixOS/nixarr"}
     node = patches.resolve_one(
-        {"pr": 42, "owner": "rasmus-kirk", "repo": "nixarr",
-         "forge": "github", "host": "github.com"},
+        {"pr": 42, "repo": "https://github.com/rasmus-kirk/nixarr"},
         mirrored, "nixarr", tmp_path)
 
     assert seen == {"host": "github.com", "owner": "rasmus-kirk",
                     "repo": "nixarr"}
     assert node["owner"] == "rasmus-kirk" and node["host"] == "github.com"
-    # and the pin's own host is untouched
-    assert mirrored["host"] == "forgejo.nimeses.com"
+    # and the pin's own url is untouched
+    assert mirrored["url"] == "https://forgejo.nimeses.com/NixOS/nixarr"
 
 
 def test_a_git_pin_can_track_a_pr_by_naming_the_repo(monkeypatch, tmp_path):
-    """A `git` pin has a url and no owner/repo, so the patch must supply them."""
+    """A `git` pin's host has no PR API as far as pnix is concerned, so the
+    patch names the repo whose pull requests it means."""
     monkeypatch.setattr("pnix.forges.get", lambda name: FakeForge())
     monkeypatch.setattr("pnix.prefetch.file", lambda url: "sha256-PATCH")
     git_pin = {"type": "git", "url": "https://forgejo.nimeses.com/NixOS/nixarr.git"}
     node = patches.resolve_one(
-        {"pr": 7, "owner": "rasmus-kirk", "repo": "nixarr", "forge": "github"},
+        {"pr": 7, "repo": "https://github.com/rasmus-kirk/nixarr"},
         git_pin, "nixarr", tmp_path)
     assert node["kind"] == "pr" and node["repo"] == "nixarr"
+    assert node["host"] == "github.com"
 
 
 def test_a_pin_with_no_repo_and_a_patch_that_names_none_says_so(monkeypatch,
                                                                 tmp_path):
     monkeypatch.setattr("pnix.forges.get", lambda name: FakeForge())
     with pytest.raises(patches.PatchError) as e:
-        patches.resolve_one({"pr": 7}, {"type": "git", "url": "u"}, "p", tmp_path)
-    assert "must name the repo" in str(e.value)
+        patches.resolve_one({"pr": 7}, {"type": "git"}, "p", tmp_path)
+    assert "needs a repo" in str(e.value) and "repo =" in str(e.value)
 
 
 def test_drift_follows_the_patch_repo_not_the_pin(monkeypatch):
@@ -265,3 +267,48 @@ def test_drift_follows_the_patch_repo_not_the_pin(monkeypatch):
                          "head": "h" * 40, "base": "b" * 40}]}
     patches.drift(node)
     assert seen == {"owner": "rasmus-kirk", "repo": "nixarr"}
+
+
+def test_a_patch_repo_on_a_known_host_needs_no_forge(monkeypatch, tmp_path):
+    """`repo` is a url, so its host settles the forge the same way a pin's
+    does. `forge` is left for a self-hosted instance, where no table can know
+    what software runs there."""
+    seen = {}
+
+    class Recording(FakeForge):
+        def pull(self, host, owner, repo, number):
+            seen.update(host=host, owner=owner, repo=repo)
+            return self._pull
+
+    monkeypatch.setattr("pnix.forges.get", lambda name: Recording())
+    monkeypatch.setattr("pnix.prefetch.file", lambda url: "sha256-PATCH")
+
+    node = patches.resolve_one(
+        {"pr": 32, "repo": "https://codeberg.org/BANanaD3V/niri-nix"},
+        {"type": "git", "url": "https://example.invalid/o/r"}, "n", tmp_path)
+    assert seen == {"host": "codeberg.org", "owner": "BANanaD3V",
+                    "repo": "niri-nix"}
+    assert node["kind"] == "pr"
+
+
+def test_owner_and_host_are_no_longer_patch_fields(tmp_path):
+    """They duplicated what a url says, in a place that could disagree."""
+    from pnix import schema
+    with pytest.raises(schema.SchemaError) as e:
+        schema.validate(
+            {"p": {"url": "https://github.com/o/r",
+                   "patches": [{"pr": 1, "owner": "up", "host": "github.com"}]}},
+            {"p": "/decl.nix"})
+    msg = str(e.value)
+    assert "'owner' is not a patch field" in msg
+    assert "'host' is not a patch field" in msg
+
+
+def test_a_patch_repo_that_is_not_a_url_is_refused(tmp_path):
+    from pnix import schema
+    with pytest.raises(schema.SchemaError) as e:
+        schema.validate(
+            {"p": {"url": "https://github.com/o/r",
+                   "patches": [{"pr": 1, "repo": "nixarr"}]}},
+            {"p": "/decl.nix"})
+    assert "is not a repository URL" in str(e.value)

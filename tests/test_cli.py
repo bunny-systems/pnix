@@ -10,7 +10,7 @@ def fake_project(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "pnix.collect.collect",
         lambda files, attr="pins": (
-            {"foo": {"type": "github", "owner": "o", "repo": "r",
+            {"foo": {"type": "github", "url": "https://github.com/o/r",
                      "ref": "main"}},
             {"foo": "/decl.nix"},
             [],
@@ -61,7 +61,7 @@ def test_update_carries_bookkeeping_fields_into_the_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "pnix.collect.collect",
         lambda files, attr="pins": (
-            {"foo": {"type": "github", "owner": "o", "repo": "r",
+            {"foo": {"type": "github", "url": "https://github.com/o/r",
                      "excludeFollow": ["nixpkgs"]}},
             {"foo": "/decl.nix"},
             [],

@@ -11,7 +11,7 @@ than on source types. Every forge below emits `kind = "tarball"`, so none of
 them adds a file to the vendored resolver or costs anyone a `pnix init`.
 """
 
-from pnix import prefetch, refs
+from pnix import prefetch, refs, urls
 
 
 class ArchiveForge:
@@ -24,23 +24,25 @@ class ArchiveForge:
 
     kinds = ("tarball",)
 
-    def host(self, spec: dict) -> str:
-        return spec.get("host") or self.default_host
-
-    def clone_url(self, spec: dict) -> str:
-        return f"https://{self.host(spec)}/{spec['owner']}/{spec['repo']}"
-
     def archive_url(self, locked: dict) -> str:
         raise NotImplementedError
 
     def resolve(self, spec: dict) -> dict:
+        """`host`, `owner` and `repo` are read off the URL, not declared.
+
+        They stay in the lock as provenance -- `pnix look` prints them and a
+        human reads them -- but they are derived, so a declaration cannot say
+        one thing and the URL another.
+        """
+        host, owner, repo = urls.parse(spec["url"])
         locked = {
             "type": self.type,
-            "host": self.host(spec),
-            "owner": spec["owner"],
-            "repo": spec["repo"],
+            "host": host,
+            "owner": owner,
+            "repo": repo,
+            "url": urls.clone_url(spec["url"]),
         }
-        locked.update(refs.resolve_for(self.clone_url(spec), spec))
+        locked.update(refs.resolve_for(locked["url"], spec))
         return locked
 
     def prefetch(self, locked: dict) -> dict:

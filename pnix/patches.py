@@ -23,7 +23,7 @@ Measured on finit #181: 17374 bytes against 18526.
 
 from pathlib import Path
 
-from pnix import forges, prefetch
+from pnix import forges, prefetch, urls
 from pnix.forges.base import ForgeError
 
 KINDS = ("pr", "commit", "url", "path")
@@ -34,7 +34,9 @@ class PatchError(Exception):
 
 
 #: a patch may name its own source repo, overriding the pin's
-SOURCE_KEYS = ("owner", "repo", "host", "forge")
+#: what a patch entry may say about *where* its PR lives. `repo` is a URL,
+#: like a pin's; `forge` names the software when the host is unknown.
+SOURCE_KEYS = ("repo", "forge")
 
 
 def _source(entry: dict, spec: dict, name: str) -> dict:
@@ -42,23 +44,30 @@ def _source(entry: dict, spec: dict, name: str) -> dict:
 
     A patch does not have to live in the repo it applies to. The case that forced
     this: a pin fetched from a self-hosted Forgejo mirror, whose pull requests are
-    upstream on GitHub. Without it, such a pin can only use `url`, hand-written.
+    upstream on GitHub. The patch names the repo the PR lives in, as a URL, the
+    same way a pin does:
 
-        patches = [ { pr = 42; owner = "rasmus-kirk"; repo = "nixarr";
-                      forge = "github"; } ];
+        patches = [ { pr = 42; repo = "https://github.com/rasmus-kirk/nixarr"; } ];
 
-    It also gives a `git`-type pin -- which has a url and no owner/repo at all --
-    a way to track a PR, by naming the repo the PR lives in.
+    `forge` is only needed when that host is not one pnix recognises -- a
+    self-hosted instance, where no table can know what software runs there.
     """
-    out = {k: spec[k] for k in SOURCE_KEYS if k in spec}
-    out.update({k: entry[k] for k in SOURCE_KEYS if k in entry})
-    for field in ("owner", "repo"):
-        if field not in out:
-            raise PatchError(
-                f"pin '{name}': this patch needs `{field}`. The pin does not "
-                f"have one (a `git` pin has only a url), so the patch must name "
-                f"the repo its pull request lives in."
-            )
+    url = entry.get("repo") or spec.get("url")
+    if not url:
+        raise PatchError(
+            f"pin '{name}': this patch needs a repo to look the pull request up "
+            f"in. The pin has no url, so give the patch one: "
+            f'`repo = "https://host/owner/name";`'
+        )
+    try:
+        host, owner, repo = urls.parse(url)
+    except urls.UrlError as err:
+        raise PatchError(f"pin '{name}': patch repo: {err}") from None
+
+    out = {"host": host, "owner": owner, "repo": repo}
+    forge = entry.get("forge") or spec.get("forge")
+    if forge:
+        out["forge"] = forge
     return out
 
 
@@ -191,6 +200,25 @@ def advice(node: dict) -> list[str]:
     return out
 
 
+def _node_source(node: dict) -> tuple[str, str, str]:
+    """(host, owner, repo) for a locked node.
+
+    Prefers the recorded provenance and falls back to parsing the node's url,
+    so a node written before those fields were derived still reports drift
+    rather than raising KeyError.
+    """
+    host = node.get("host")
+    owner, repo = node.get("owner"), node.get("repo")
+    if not (host and owner and repo) and isinstance(node.get("url"), str):
+        try:
+            u_host, u_owner, u_repo = urls.parse(node["url"])
+        except urls.UrlError:
+            pass
+        else:
+            host, owner, repo = host or u_host, owner or u_owner, repo or u_repo
+    return host or "github.com", owner, repo
+
+
 def drift(node: dict) -> list[str]:
     """What changed upstream since this patch was locked. One request per PR.
 
@@ -206,9 +234,10 @@ def drift(node: dict) -> list[str]:
             forge = forges.get(patch["forge"])
             # The patch records its own repo, which is not necessarily the
             # pin's -- a mirrored pin can track an upstream PR.
-            pull = forge.pull(patch.get("host") or node.get("host") or "github.com",
-                              patch.get("owner") or node["owner"],
-                              patch.get("repo") or node["repo"],
+            host, owner, repo = _node_source(node)
+            pull = forge.pull(patch.get("host") or host,
+                              patch.get("owner") or owner,
+                              patch.get("repo") or repo,
                               patch["number"])
         except (ForgeError, KeyError, forges.UnknownForge) as err:
             out.append(f"{label}: could not check ({err})")
