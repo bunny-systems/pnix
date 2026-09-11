@@ -336,23 +336,22 @@ with `import ./.pnix { nixpkgsPin = "nixpkgs-stable"; }`.
 
 ## Overrides
 
-Three layers, lowest to highest — each narrower in scope than the last.
+Two layers, lowest to highest — the second is narrower in scope than the first.
 
 ```nix
 # 1. programmatic, this caller
 import ./.pnix { overrides = { finix = ../finix; }; }
 ```
 
-```nix
-# 2. .pnix/pins.local.nix — this machine. Gitignore it.
-{ finix = ../finix;
-  hjem  = "/home/me/Projects/nix/hjem"; }
-```
-
 ```sh
-# 3. PNIX_OVERRIDE — this command
-PNIX_OVERRIDE=finix=/home/nimeses/Projects/nix/finix nixos-rebuild switch --file .
+# 2. PNIX_OVERRIDE — this command
+PNIX_OVERRIDE=finix=/home/nimeses/Projects/nix/finix nh os switch
 PNIX_OVERRIDE="finix=~/Projects/nix/finix,hjem=/tmp/hjem" nix-instantiate …
+
+# Escalating first drops it: sudo and doas both reset the environment, and an
+# unset variable is indistinguishable from no override at all. Set it past the
+# boundary instead.
+sudo env PNIX_OVERRIDE=finix=/home/nimeses/Projects/nix/finix nixos-rebuild switch --file .
 ```
 
 Absolute paths only (`~/` is expanded in the variable). A remote ref is what the
@@ -363,8 +362,10 @@ changing a rev is still `pnix update`. Every failure throws: an unknown pin name
 lists the known ones, a relative path and a missing directory are both refused.
 An override that silently did nothing would be the worst possible outcome.
 
-`.pnix/pins.local.nix` must **not** contain a `pins` attribute. Discovery skips
-`.pnix/` outright, so this is only a hazard if you point `localFile` elsewhere.
+There is deliberately no machine-local override *file*. One host building
+differently from what the committed tree says, with nothing in a diff to explain
+it, is worse than retyping the variable. An override should be visible in the
+command that causes it.
 
 ---
 

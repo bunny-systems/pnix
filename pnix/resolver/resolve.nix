@@ -21,9 +21,6 @@
   # a caller that wants a reproducible evaluation regardless of the shell.
   overrideVar ? "PNIX_OVERRIDE",
 
-  # Gitignored, machine-local overrides beside the lock. null disables it.
-  localFile ? builtins.dirOf lockFile + "/pins.local.nix",
-
   # Which pin supplies the nixpkgs used to apply patches. Only consulted when
   # some pin actually declares patches.
   nixpkgsPin ? "nixpkgs",
@@ -79,14 +76,12 @@ let
         var = overrideVar;
       };
 
-  localOverrides = import ./local.nix {
-    inherit pins;
-    file = localFile;
-  };
-
-  # Lowest to highest: what the caller passed, then what this machine says, then
-  # what this one command says. Each layer is narrower in scope than the last.
-  allOverrides = overrides // localOverrides // envOverrides;
+  # Lowest to highest: what this config says, then what this one command says.
+  # There is deliberately no layer in between: a machine-local override file
+  # would make one host build differently from what the committed tree says,
+  # with nothing in a diff to explain it. An override should be visible in the
+  # command that causes it.
+  allOverrides = overrides // envOverrides;
 
   fetched = builtins.mapAttrs (name: node: allOverrides.${name} or (fetchers.fetch node)) pins;
 

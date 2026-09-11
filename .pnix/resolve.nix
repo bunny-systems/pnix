@@ -8,8 +8,6 @@
 
   overrideVar ? "PNIX_OVERRIDE",
 
-  localFile ? builtins.dirOf lockFile + "/pins.local.nix",
-
   nixpkgsPin ? "nixpkgs",
 }:
 let
@@ -47,12 +45,7 @@ let
         var = overrideVar;
       };
 
-  localOverrides = import ./local.nix {
-    inherit pins;
-    file = localFile;
-  };
-
-  allOverrides = overrides // localOverrides // envOverrides;
+  allOverrides = overrides // envOverrides;
 
   fetched = builtins.mapAttrs (name: node: allOverrides.${name} or (fetchers.fetch node)) pins;
 

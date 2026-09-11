@@ -223,4 +223,3 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-pins.local.nix
