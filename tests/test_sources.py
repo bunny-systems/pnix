@@ -197,3 +197,23 @@ def test_the_registry_lists_every_type_on_a_typo():
     msg = str(e.value)
     for t in ("github", "gitlab", "sourcehut", "tarball", "channel", "path"):
         assert t in msg
+
+
+def test_a_rev_pinned_git_source_still_gets_a_ref_when_it_is_head(
+        local_repo, local_repo_head):
+    """An explicit rev leaves no ref, and fetchGit then needs allRefs -- which
+    refetches every ref on every evaluation. When the rev is HEAD, one
+    ls-remote at lock time avoids that forever."""
+    locked = sources.get("git").resolve(
+        {"type": "git", "url": f"file://{local_repo}", "rev": local_repo_head})
+    assert locked["ref"] == "HEAD"
+    assert sources.get("git").fetch_spec(locked)["ref"] == "HEAD"
+
+
+def test_a_rev_that_is_not_head_keeps_allrefs(local_repo, monkeypatch):
+    """pnix does not know which branch an arbitrary rev lives on; guessing
+    would produce a lock that cannot fetch."""
+    locked = sources.get("git").resolve(
+        {"type": "git", "url": f"file://{local_repo}", "rev": "9" * 40})
+    assert "ref" not in locked
+    assert "ref" not in sources.get("git").fetch_spec(locked)

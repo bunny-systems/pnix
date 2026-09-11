@@ -167,8 +167,7 @@ def resolve_for(url: str, spec: dict) -> dict:
 
     ref = spec.get("ref")
     out = {"rev": resolve(url, ref)}
-    if ref is not None:
-        out["ref"] = ref
+    out["ref"] = ref if ref is not None else "HEAD"
     return out
 
 

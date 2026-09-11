@@ -143,4 +143,19 @@ def test_strategy_precedence(local_repo, local_repo_head):
     assert refs.resolve_for(url, {"tag": "v2.0.0"})["rev"] == local_repo_head
     got = refs.resolve_for(url, {"ref": "main"})
     assert got == {"rev": local_repo_head, "ref": "main"}
-    assert refs.resolve_for(url, {}) == {"rev": local_repo_head}
+    assert refs.resolve_for(url, {}) == {"rev": local_repo_head, "ref": "HEAD"}
+
+
+def test_the_implicit_head_case_is_recorded_as_a_ref(local_repo, local_repo_head):
+    """Not cosmetic. Without a ref, the git fetcher must pass `allRefs = true`
+    so fetchGit can find the rev, and that refetches every ref on the remote on
+    every evaluation -- measured at 0.40-3.29 s and erratic against 0.05-0.07 s
+    and stable with a ref."""
+    got = refs.resolve_for(f"file://{local_repo}", {})
+    assert got == {"rev": local_repo_head, "ref": "HEAD"}
+
+
+def test_an_explicit_rev_records_no_ref(local_repo):
+    """pnix does not know which branch someone else's rev lives on, so allRefs
+    stays the only way to find it."""
+    assert refs.resolve_for(f"file://{local_repo}", {"rev": "f" * 40}) == {"rev": "f" * 40}
