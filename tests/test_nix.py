@@ -139,3 +139,29 @@ def test_the_two_halves_agree_on_the_lock_schema():
 
 def test_patch_cases():
     check("patch")
+
+
+def _fetch_git(node: str):
+    """Evaluate the vendored git primitive on a lock node. Returns the process."""
+    expr = (f"(import {ROOT}/pnix/resolver/eval/fetchers.nix {{ }}).git {node}")
+    return subprocess.run(
+        ["nix-instantiate", "--eval", "--strict", "--expr", expr, *NO_EXPERIMENTAL],
+        capture_output=True, text=True, check=False,
+    )
+
+
+def test_a_git_fetch_node_reaches_the_builtin_whole(local_repo, local_repo_head):
+    """The fetchers are flat passthroughs, so a `fetch` node's fields arrive at
+    fetchGit unchanged. Proved both ways against a real local repo: the options
+    pnix does not enumerate still work, and a field the builtin rejects still
+    fails loudly rather than being silently dropped.
+    """
+    base = (f'{{ kind = "git"; url = "file://{local_repo}"; '
+            f'rev = "{local_repo_head}"; ref = "main"; ')
+
+    ok = _fetch_git(base + 'exportIgnore = true; }')
+    assert ok.returncode == 0, ok.stderr
+
+    bad = _fetch_git(base + 'notAFetchGitOption = true; }')
+    assert bad.returncode != 0
+    assert "not supported by scheme" in bad.stderr

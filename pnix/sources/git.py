@@ -13,7 +13,16 @@ records `ref = "HEAD"` for the implicit case so that fallback is rarely reached.
 
 from pnix import refs
 
-FLAGS = ("submodules", "shallow")
+# Boolean fetchGit options carried straight through to the builtin. The
+# fetcher is a flat passthrough, so extending this tuple is the whole of adding
+# one -- nothing in the vendored resolver changes.
+#
+#   lfs          without it an LFS repo yields pointer files, not content, and
+#                nothing warns; the build fails later on a 130-byte "binary".
+#   exportIgnore fetchGit ignores .gitattributes export-ignore by default while
+#                a forge tarball honours it. Same rev, different tree. This is
+#                how a git pin and a tarball pin of one repo disagree.
+FLAGS = ("submodules", "shallow", "lfs", "exportIgnore")
 
 
 class Git:

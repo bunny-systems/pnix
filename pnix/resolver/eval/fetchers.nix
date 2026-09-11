@@ -30,27 +30,29 @@
 # off: fetchTarball, fetchGit and fetchurl are stable; fetchTree is not.
 { }:
 let
+  # Everything in a `fetch` node except the discriminator and the hash goes to
+  # the builtin **unchanged**. That is the point: `submodules`, `shallow`,
+  # `lfs`, `exportIgnore`, `name`, `verifyCommit`, `publicKeys` and whatever a
+  # future Nix adds all work without touching this file, so adding one is a
+  # pure Python change and the vendored half stays frozen -- the same argument
+  # that made dispatch key on `kind` rather than `type`, one level further in.
+  #
+  # Safe because `fetch` is closed: it is built by `Source.fetch_spec`, never by
+  # a user. A field the builtin does not know still fails loudly -- fetchGit
+  # answers `input attribute 'x' not supported by scheme 'git'`.
+  rest = f: removeAttrs f [ "kind" "hash" ];
+
   primitives = {
     # An archive at a URL, unpacked. The hash is the NAR hash of the unpacked
     # tree, so upstream recompression cannot invalidate it. This is what every
     # forge's codeload endpoint reduces to -- github, gitlab, forgejo/gitea,
     # sourcehut -- which is why those are Python-only additions.
-    tarball =
-      f:
-      builtins.fetchTarball {
-        inherit (f) url;
-        sha256 = f.hash;
-      };
+    tarball = f: builtins.fetchTarball (rest f // { sha256 = f.hash; });
 
     # A single file at a URL, not unpacked. The hash is the *flat* file hash,
     # not a NAR hash -- that is the whole reason this is a separate primitive
     # from `tarball` rather than a flag on it.
-    file =
-      f:
-      builtins.fetchurl {
-        inherit (f) url;
-        sha256 = f.hash;
-      };
+    file = f: builtins.fetchurl (rest f // { sha256 = f.hash; });
 
     # A git checkout. Content-addressed by rev, so no hash is stored: a rev is
     # already a cryptographic commitment to the tree.
@@ -58,16 +60,7 @@ let
     # The primitive to use when submodules are needed -- forge tarballs do not
     # carry them. Without a `ref`, allRefs is required: fetchGit defaults to the
     # remote's HEAD branch and cannot find a rev that lives anywhere else.
-    git =
-      f:
-      builtins.fetchGit (
-        {
-          inherit (f) url rev;
-        }
-        // (if f ? ref then { inherit (f) ref; } else { allRefs = true; })
-        // (if f.submodules or false then { submodules = true; } else { })
-        // (if f.shallow or false then { shallow = true; } else { })
-      );
+    git = f: builtins.fetchGit (rest f // (if f ? ref then { } else { allRefs = true; }));
 
     # A literal path. Carries no hash and breaks a clean clone elsewhere, so it
     # belongs in an override, never in a committed lock.

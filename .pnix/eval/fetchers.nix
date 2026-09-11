@@ -1,31 +1,14 @@
 # pnix-managed. delete this line to take ownership; pnix will leave it alone.
 { }:
 let
+  rest = f: removeAttrs f [ "kind" "hash" ];
+
   primitives = {
-    tarball =
-      f:
-      builtins.fetchTarball {
-        inherit (f) url;
-        sha256 = f.hash;
-      };
+    tarball = f: builtins.fetchTarball (rest f // { sha256 = f.hash; });
 
-    file =
-      f:
-      builtins.fetchurl {
-        inherit (f) url;
-        sha256 = f.hash;
-      };
+    file = f: builtins.fetchurl (rest f // { sha256 = f.hash; });
 
-    git =
-      f:
-      builtins.fetchGit (
-        {
-          inherit (f) url rev;
-        }
-        // (if f ? ref then { inherit (f) ref; } else { allRefs = true; })
-        // (if f.submodules or false then { submodules = true; } else { })
-        // (if f.shallow or false then { shallow = true; } else { })
-      );
+    git = f: builtins.fetchGit (rest f // (if f ? ref then { } else { allRefs = true; }));
 
     path = f: /. + f.path;
   };

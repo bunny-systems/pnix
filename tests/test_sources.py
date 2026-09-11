@@ -217,3 +217,26 @@ def test_a_rev_that_is_not_head_keeps_allrefs(local_repo, monkeypatch):
         {"type": "git", "url": f"file://{local_repo}", "rev": "9" * 40})
     assert "ref" not in locked
     assert "ref" not in sources.get("git").fetch_spec(locked)
+
+
+def test_git_carries_every_declared_flag_into_the_fetch_node():
+    """FLAGS is the whole of pnix's fetchGit boolean surface, and the fetcher
+    forwards a node wholesale -- so extending this tuple is all it takes to
+    support a new option. `lfs` and `exportIgnore` earn their place: without
+    the first an LFS repo yields pointer files, and without the second a git
+    pin and a forge tarball of the same rev give different trees."""
+    from pnix.sources.git import FLAGS, Git
+
+    locked = {"type": "git", "url": "u", "rev": "r", "ref": "main"}
+    locked.update(dict.fromkeys(FLAGS, True))
+    spec = Git().fetch_spec(locked)
+    assert {"lfs", "exportIgnore"} <= set(FLAGS)
+    for flag in FLAGS:
+        assert spec[flag] is True, flag
+
+
+def test_git_omits_flags_that_were_not_declared():
+    from pnix.sources.git import FLAGS, Git
+
+    spec = Git().fetch_spec({"type": "git", "url": "u", "rev": "r"})
+    assert not (set(FLAGS) & set(spec))

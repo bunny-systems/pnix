@@ -120,3 +120,35 @@ def test_a_root_that_is_a_file_is_used_directly(tmp_path):
     f = tmp_path / "pins.nix"
     f.write_text('{ pins.foo.type = "github"; }\n')
     assert discover.candidates([f]) == [f.resolve()]
+
+
+def test_a_hidden_directory_is_never_scanned(tmp_path):
+    """`~/nixconfig/.tack/default.nix` holds a literal `pins = fromTOML …`, so
+    it is a candidate by construction, and evaluating it throws `undefined
+    variable 'fetchTree'` under `experimental-features ""`. The collector's
+    probe cannot rescue that: `tryEval` catches a throw but not an undefined
+    variable, so collection aborts for the whole tree. Pruning hidden dirs is
+    the only place this can be stopped."""
+    tack = tmp_path / ".tack"
+    tack.mkdir()
+    (tack / "default.nix").write_text("let pins = { }; in pins\n")
+    (tmp_path / "real.nix").write_text('{ pins.foo.type = "github"; }\n')
+    assert [p.name for p in discover.candidates([tmp_path])] == ["real.nix"]
+
+
+def test_a_path_ending_in_the_attr_name_is_not_a_candidate(tmp_path):
+    """`~/nixconfig/override.nix` matched only because it mentions
+    `./.tack/pins.toml`. A declaration is never written `foo/pins.bar`."""
+    (tmp_path / "override.nix").write_text(
+        'builtins.fromTOML (builtins.readFile ./.tack/pins.toml)\n')
+    assert discover.candidates([tmp_path]) == []
+
+
+def test_an_explicit_hidden_root_is_still_honoured(tmp_path):
+    """Pruning applies to the walk, not to what the user names. `--root` is how
+    you say you meant it."""
+    hidden = tmp_path / ".config"
+    hidden.mkdir()
+    decl = hidden / "decl.nix"
+    decl.write_text('{ pins.foo.type = "github"; }\n')
+    assert discover.candidates([decl]) == [decl.resolve()]

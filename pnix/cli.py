@@ -20,12 +20,42 @@ from pnix import patches as patches_mod
 LOCK_NAME = vendor.DEST / "pins.lock.json"
 ATTR = "pins"
 
+
 # Declaration fields that do not affect what gets fetched.
 NON_FETCH_FIELDS = {"patches", "importable", "follows", "excludeFollow", "flake",
                     "dir", "forge"}
 
 # Declaration fields that are pnix bookkeeping but must reach the resolver.
 CARRIED_FIELDS = ("importable", "follows", "excludeFollow", "flake", "dir")
+
+
+class ProjectError(Exception):
+    pass
+
+
+def find_project(start: Path | None) -> Path:
+    """The nearest directory at or above `start` that holds a `.pnix/`.
+
+    Anchoring on the vendored directory is what lets `pnix look` work from
+    anywhere inside a config repo, the way `git status` does. Without it
+    `--project` defaults to the working directory, so running from
+    `~/nixconfig/modules` silently treats `modules/` as the project: no lock,
+    every pin reported as "not locked yet".
+
+    An explicit `--project` is taken literally and never searched upward -- if
+    you named a directory, you meant that directory.
+    """
+    if start is not None:
+        return Path(start)
+
+    here = Path.cwd().resolve()
+    for candidate in (here, *here.parents):
+        if (candidate / vendor.DEST).is_dir():
+            return candidate
+    raise ProjectError(
+        f"no {vendor.DEST}/ in {here} or any parent. Run `pnix init` in the "
+        f"project root first, or name it with --project."
+    )
 
 
 def _fetch_spec(spec: dict) -> dict:
@@ -98,7 +128,16 @@ def _resolve_all(project: Path, names: list[str], write: bool,
     reported from the rev alone.
     """
     lock_path = project / LOCK_NAME
-    existing = lock_mod.read(lock_path)
+    existing, migrated_from = lock_mod.read_at(lock_path)
+    if migrated_from is not None:
+        # The lock is carried forward rather than discarded, so no pin loses its
+        # rev. The *resolver* in this repo is the stale half: it checks the
+        # schema and will refuse the file this run is about to write.
+        print(
+            f"pnix: lock is schema {migrated_from}, migrating to "
+            f"{lock_mod.SCHEMA}; run `pnix init` to update the vendored resolver",
+            file=sys.stderr,
+        )
     pins, _ = _collect(project, roots)
 
     result: dict[str, dict] = {}
@@ -152,7 +191,7 @@ def _resolve_all(project: Path, names: list[str], write: bool,
 
 
 def cmd_update(args) -> int:
-    resolved, _ = _resolve_all(Path(args.project), args.names, write=True,
+    resolved, _ = _resolve_all(find_project(args.project), args.names, write=True,
                                roots=args.root)
     for name in sorted(resolved):
         for line in patches_mod.applies_to(resolved[name]):
@@ -170,13 +209,15 @@ def cmd_update(args) -> int:
 
 
 def cmd_init(args) -> int:
-    for path in vendor.install(Path(args.project), force=args.force):
+    # `init` is the one command that must work where no `.pnix/` exists yet, so
+    # it takes the working directory rather than searching for one.
+    for path in vendor.install(Path(args.project or "."), force=args.force):
         print(f"wrote {path}")
     return 0
 
 
 def cmd_look(args) -> int:
-    project = Path(args.project)
+    project = find_project(args.project)
     fresh, existing = _resolve_all(project, [], write=False, roots=args.root,
                                    prefetch=False)
     moved = False
@@ -209,7 +250,11 @@ def cmd_look(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pnix")
-    parser.add_argument("--project", default=".", help="project root")
+    parser.add_argument(
+        "--project", default=None,
+        help="project root; default: the nearest directory at or above the "
+             "working directory containing .pnix/ (for init: the working "
+             "directory)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     root_help = ("directory to scan for declarations; repeatable, "
@@ -232,7 +277,12 @@ def main(argv: list[str] | None = None) -> int:
     lk.set_defaults(func=cmd_look)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ProjectError as e:
+        # Running outside a project is a usage mistake, not a crash.
+        print(f"pnix: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

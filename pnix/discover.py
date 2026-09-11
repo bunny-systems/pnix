@@ -21,7 +21,25 @@ from pnix.vendor import MARKER
 # Pruned during the walk, not filtered afterwards: `.git` in a real repo holds
 # thousands of objects, and descending into it to throw the results away is the
 # expensive half.
-SKIP_DIRS = {".git", ".direnv", "result", ".pnix"}
+SKIP_DIRS = {"result"}
+
+
+def _skip(name: str) -> bool:
+    """Hidden directories are never scanned.
+
+    `.git`, `.direnv` and `.pnix` were listed by name until a real config
+    showed why that is the wrong shape: `~/nixconfig/.tack/default.nix` holds a
+    literal `pins = fromTOML …`, so it is a candidate by construction, and
+    evaluating it throws `undefined variable 'fetchTree'` because pnix runs with
+    experimental features off. That is **not survivable** -- the collector's
+    probe uses `tryEval`, which catches a `throw` but *not* an undefined
+    variable, so there is no way to skip such a file once it is a candidate.
+    Collection aborts for the whole tree.
+
+    Every tool that vendors an unevaluatable Nix file puts it in a dot
+    directory. Pruning them all is the rule that covers the next one too.
+    """
+    return name.startswith(".") or name in SKIP_DIRS
 
 SUFFIX = ".nix"
 
@@ -33,20 +51,22 @@ def _pattern(attr: str) -> re.Pattern[bytes]:
     `pins = { … }` -- so the name must be followed by `.` or `=`, and must not
     be preceded by `.`, which is what makes it an attribute *access*.
 
-    Both halves earn their keep. Without the trailing `[.=]`, every nixpkgs
+    `/` is excluded for the same reason as `.`: a declaration is never written
+    `foo/pins.bar`, but a *path* to another tool's data is -- `~/nixconfig`'s
+    `override.nix` became a candidate solely because it mentions
+    `./.tack/pins.toml`, and that file cannot be evaluated at all.
+
+    All three halves earn their keep. Without the trailing `[.=]`, every nixpkgs
     package that depends on the Python package `pins` is a candidate. Without
-    the leading `.` exclusion, a consumer's own `default.nix` matches on the
-    path `./.pnix` -- and importing that evaluates the resolver, which reads
-    a lock that does not exist yet on the very first `pnix update`. That one is
-    a bootstrap failure, not just noise.
+    the leading exclusions, a path that merely ends in `pins.something` is one.
 
     The design's invariant survives intact: a false negative is still
     impossible for a literal declaration, because a literal declaration is
-    exactly one of the two shapes above.
+    exactly one of the two shapes above, and neither can follow `.` or `/`.
     """
     word = re.escape(attr).encode()
     return re.compile(
-        rb"(?<![A-Za-z0-9_.])" + word + rb"[\"']?\s*[.=]",
+        rb"(?<![A-Za-z0-9_./])" + word + rb"[\"']?\s*[.=]",
         re.DOTALL,
     )
 
@@ -62,7 +82,7 @@ def _walk(root: Path):
         yield root
         return
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        dirnames[:] = [d for d in dirnames if not _skip(d)]
         for name in filenames:
             if name.endswith(SUFFIX):
                 yield Path(dirpath) / name

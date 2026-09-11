@@ -20,6 +20,8 @@ FIELDS: dict[str, type] = {
     "dir": str,
     "submodules": bool,
     "shallow": bool,
+    "lfs": bool,
+    "exportIgnore": bool,
     "flake": bool,
     "follows": dict,
     "excludeFollow": list,

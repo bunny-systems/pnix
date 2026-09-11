@@ -26,7 +26,7 @@ let
         hash = patch.hash;
       };
 
-  SCHEMA = 3;
+  SCHEMA = 4;
 
   doc = builtins.fromJSON (builtins.readFile lockFile);
   schema = doc.schema or (throw "pnix: ${toString lockFile} has no `schema`");

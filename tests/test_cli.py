@@ -128,3 +128,40 @@ def test_update_reports_skipped_candidates(tmp_path, monkeypatch, capsys):
     cli.main(["--project", str(tmp_path), "update"])
     err = capsys.readouterr().err
     assert "skipped 1 of 1" in err and "/some/package.nix" in err
+
+
+# --- project discovery -----------------------------------------------------
+
+def test_the_project_is_the_nearest_directory_holding_dot_pnix(tmp_path, monkeypatch):
+    """`pnix look` from deep in a module tree has to find the repo, the way
+    `git status` does. Defaulting to the working directory instead means
+    `modules/` is treated as the project: no lock, every pin "not locked yet"."""
+    (tmp_path / ".pnix").mkdir()
+    deep = tmp_path / "modules" / "features" / "desktop"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+    assert cli.find_project(None) == tmp_path.resolve()
+
+
+def test_an_explicit_project_is_never_searched_upward(tmp_path, monkeypatch):
+    """If you named a directory, you meant that directory -- even one with no
+    .pnix/ yet, which is what `init` needs."""
+    (tmp_path / ".pnix").mkdir()
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert cli.find_project(inner) == inner
+
+
+def test_outside_a_project_it_is_a_usage_error_not_a_traceback(tmp_path, monkeypatch,
+                                                               capsys):
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["look"]) == 2
+    assert "no .pnix/" in capsys.readouterr().err
+
+
+def test_init_works_where_no_project_exists_yet(tmp_path, monkeypatch):
+    """The one command that must not require a .pnix/ to already be there."""
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["init"]) == 0
+    assert (tmp_path / ".pnix" / "default.nix").exists()

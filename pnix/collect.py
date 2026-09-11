@@ -85,6 +85,9 @@ def _blame(files: list[Path], attr: str, stderr: str) -> str:
         f"{stderr}\n\n"
         f"pnix: the candidate(s) below could not be evaluated at all, which "
         f"aborts collection:\n{named}\n"
-        f"If a file here is not meant to declare pins, the usual cause is an "
-        f"`import` of a path that does not exist."
+        f"If a file here is not meant to declare pins, scope the scan with "
+        f"--root, or move it into a hidden directory -- those are never "
+        f"walked. The collector cannot skip it for you: its probe uses "
+        f"tryEval, which catches a `throw` but not an undefined variable or a "
+        f"missing import."
     )

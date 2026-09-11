@@ -23,7 +23,13 @@ nix-env -f https://forgejo.example.com/you/pnix/archive/main.tar.gz -iA packages
 nix run "git+https://forgejo.example.com/you/pnix" -- --help    # flakes, if you prefer
 ```
 
-Swap `main` for a rev to pin it. `--project` comes **before** the subcommand.
+Swap `main` for a rev to pin it.
+
+`--project` comes **before** the subcommand. It defaults to the nearest
+directory at or above the working directory containing `.pnix/`, so `update`
+and `look` work from anywhere inside a repo — `git status` rules. `init` is the
+exception: it has to run where no `.pnix/` exists yet, so it takes the working
+directory.
 
 ### This repo has no flake inputs
 
@@ -61,7 +67,7 @@ pnix look                    report drift; writes nothing, downloads nothing
 
 | flag | on | meaning |
 |---|---|---|
-| `--project DIR` | all | project root (default `.`) |
+| `--project DIR` | all | project root; default: nearest parent with a `.pnix/` (`init`: the working directory) |
 | `--root DIR` | `update`, `look` | where to scan for declarations; repeatable. A file works too. Default: the project root |
 | `--force` | `init` | overwrite files that lost their pnix marker |
 | `names…` | `update` | update only these pins; the rest keep their locked entry |
@@ -212,9 +218,25 @@ pins.x = {
   owner = "o"; repo = "r";
   dir = "nix";          # the flake.nix lives in a subdirectory
   flake = false;        # fetch it, do not evaluate it — source only
-  shallow = true;       # git only
+
+  # git only — passed straight to builtins.fetchGit
+  shallow = true;
+  submodules = true;
+  lfs = true;           # without it an LFS repo yields pointer files, silently
+  exportIgnore = true;  # honour .gitattributes export-ignore, as a tarball does
 };
 ```
+
+**`exportIgnore` is how a `git` pin and a forge tarball of the same rev
+disagree.** A codeload archive honours `.gitattributes export-ignore`;
+`fetchGit` ignores it unless told. Same commit, different tree, different store
+path — so if you swap a pin between `git` and a forge type and the drvPath
+moves, this is the first thing to check.
+
+A `fetch` node reaches the builtin whole, so any `fetchGit` option Nix accepts
+works once pnix's schema knows its name — `name`, `verifyCommit`, `publicKeys`
+and the rest are one entry in `pnix/sources/git.py` each, with no change to the
+vendored resolver.
 
 ---
 
