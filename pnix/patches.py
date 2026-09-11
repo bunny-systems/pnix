@@ -21,6 +21,7 @@ touches.
 Measured on finit #181: 17374 bytes against 18526.
 """
 
+import os
 from pathlib import Path
 
 from pnix import forges, prefetch, urls
@@ -85,26 +86,46 @@ def _forge_for(spec: dict, name: str) -> tuple[str, str]:
 
 
 def _relative(path: str, project: Path, name: str) -> str:
-    """A local patch is recorded relative to the project root.
+    """A local patch is recorded relative to **the lock file's own directory**.
 
-    An absolute path would not survive a clone onto another machine, and the
-    lock is committed. Refusing is better than writing one down.
+    Two separate rules, and conflating them was a bug: the patch must live
+    *inside the project* (an absolute path would not survive a clone, and the
+    lock is committed), but it is written down relative to the lock, because
+    that is what reads it -- `resolve.nix` resolves a patch path as
+    `dirOf lockFile + path`.
+
+    Those agreed for as long as the lock sat at the project root. When it moved
+    into `.pnix/` the recorded `patches/x.patch` started resolving to
+    `.pnix/patches/x.patch`, and every local patch failed with `path ... does
+    not exist`. Anchoring on the lock keeps them in step wherever it lives; the
+    result is `../patches/x.patch`, and Nix normalises the `..` itself.
     """
-    p = Path(path)
+    p = Path(path).resolve()
+    root = project.resolve()
     try:
-        return p.resolve().relative_to(project.resolve()).as_posix()
+        p.relative_to(root)
     except ValueError:
         raise PatchError(
             f"pin '{name}': local patch {path} is outside the project root "
             f"{project}. A committed lock cannot reference it."
         ) from None
+    return Path(os.path.relpath(p, _lock_dir(root))).as_posix()
+
+
+def _lock_dir(project: Path) -> Path:
+    """Where the lock lives, which is what a recorded patch path is relative to."""
+    from pnix import cli
+
+    return (project / cli.LOCK_NAME).parent
 
 
 def resolve_one(entry, spec: dict, name: str, project: Path) -> dict:
     """One declaration -> one locked patch node. Downloads."""
     if isinstance(entry, str):
         rel = _relative(entry, project, name)
-        if not (project / rel).is_file():
+        # resolve() first: pathlib does not normalise a ".." segment, so the
+        # check would fail on a lock directory that does not exist yet.
+        if not (_lock_dir(project) / rel).resolve().is_file():
             raise PatchError(f"pin '{name}': no such patch file: {rel}")
         return {"kind": "path", "path": rel}
 

@@ -69,12 +69,30 @@ def test_a_url_is_taken_as_given(fake, tmp_path):
                     "url": "https://e/x.diff", "hash": "sha256-PATCH"}
 
 
-def test_a_local_patch_is_recorded_relative_to_the_project(fake, tmp_path):
+def test_a_local_patch_is_recorded_relative_to_the_lock(fake, tmp_path):
+    """`resolve.nix` reads a patch path as `dirOf lockFile + path`, so that is
+    what it must be relative to. It was recorded relative to the *project* root
+    instead, which agreed only for as long as the lock sat there: once the lock
+    moved into `.pnix/`, `patches/fix.diff` resolved to `.pnix/patches/fix.diff`
+    and every local patch failed with `path ... does not exist`."""
     (tmp_path / "patches").mkdir()
     p = tmp_path / "patches" / "fix.diff"
     p.write_text("diff --git a/x b/x\n")
     node = patches.resolve_one(str(p), SPEC, "p", tmp_path)
-    assert node == {"kind": "path", "path": "patches/fix.diff"}
+    assert node == {"kind": "path", "path": "../patches/fix.diff"}
+
+
+def test_the_recorded_patch_path_resolves_from_the_lock_directory(fake, tmp_path):
+    """The two halves, checked against each other rather than one at a time."""
+    from pnix import cli
+
+    (tmp_path / "patches").mkdir()
+    p = tmp_path / "patches" / "fix.diff"
+    p.write_text("diff --git a/x b/x\n")
+    node = patches.resolve_one(str(p), SPEC, "p", tmp_path)
+
+    lock_dir = (tmp_path / cli.LOCK_NAME).parent
+    assert (lock_dir / node["path"]).resolve() == p.resolve()
 
 
 def test_a_local_patch_outside_the_project_is_refused(fake, tmp_path):
