@@ -12,8 +12,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from pnix import __version__, discover, refs, schema, sources, vendor
 from pnix import collect as collect_mod
-from pnix import discover, refs, schema, sources, vendor
 from pnix import lock as lock_mod
 from pnix import patches as patches_mod
 
@@ -33,6 +33,10 @@ CARRIED_FIELDS = ("importable", "follows", "excludeFollow", "flake", "dir")
 
 class ProjectError(Exception):
     pass
+
+
+class UsageError(Exception):
+    """A command that cannot do what it was asked. Never a silent no-op."""
 
 
 def find_project(start: Path | None) -> Path:
@@ -215,6 +219,25 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         )
     pins, _ = _collect(project, roots)
 
+    if names:
+        # A name that matches nothing resolved nothing and kept every existing
+        # entry, so a typo looked exactly like a successful no-op.
+        unknown = [n for n in names if n not in pins]
+        if unknown:
+            known = ", ".join(sorted(pins)) or "none declared"
+            raise UsageError(
+                f"{', '.join(unknown)}: not a declared pin. known: {known}"
+            )
+
+    # Pruning is the destructive half of `update`, and it used to be the silent
+    # one: scoping a run with `--root` to a file that no longer holds every
+    # declaration drops the rest from the lock, with no output at all when the
+    # scoped set is empty.
+    if not names:
+        for gone in sorted(set(existing) - set(pins)):
+            print(f"pnix: {gone}: locked but no longer declared -- removing",
+                  file=sys.stderr)
+
     result: dict[str, dict] = {}
     todo: dict[str, dict] = {}
     for name, spec in pins.items():
@@ -336,6 +359,10 @@ def cmd_look(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pnix")
+    # Worth having because a pnix older than the lock refuses it outright, so
+    # "which pnix is this" is the first question when that happens.
+    parser.add_argument("--version", action="version",
+                        version=f"pnix {__version__}")
     parser.add_argument(
         "--project", default=None,
         help="project root; default: the nearest directory at or above the "
@@ -369,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except ProjectError as e:
+    except (ProjectError, UsageError) as e:
         # Running outside a project is a usage mistake, not a crash.
         print(f"pnix: {e}", file=sys.stderr)
         return 2

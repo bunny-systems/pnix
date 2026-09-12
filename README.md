@@ -70,6 +70,7 @@ pnix look                    report drift; writes nothing, downloads nothing
 | `--project DIR` | all | project root; default: nearest parent with a `.pnix/` (`init`: the working directory) |
 | `--root DIR` | `update`, `look` | where to scan for declarations; repeatable. A file works too. Default: the project root |
 | `--force` | `init` | overwrite files that lost their pnix marker |
+| `--version` | — | print the version and exit |
 | `-q`, `--quiet` | `update` | no per-pin progress; warnings and errors still print |
 | `names…` | `update` | update only these pins; the rest keep their locked entry |
 

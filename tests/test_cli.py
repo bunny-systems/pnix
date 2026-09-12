@@ -234,3 +234,58 @@ def test_look_stays_quiet_by_default(fake_project, capsys):
     cli.main(["--project", str(fake_project), "look"])
     err = capsys.readouterr().err
     assert "resolving" not in err
+
+
+# --- commands that cannot do what they were asked ---------------------------
+
+def test_updating_a_pin_that_is_not_declared_is_an_error(fake_project, capsys):
+    """It resolved nothing, kept every existing entry and exited 0 -- a typo
+    looked exactly like a successful no-op."""
+    assert cli.main(["--project", str(fake_project), "update", "fooo"]) == 2
+    err = capsys.readouterr().err
+    assert "not a declared pin" in err and "known: foo" in err
+
+
+def test_a_bad_name_does_not_touch_the_lock(fake_project):
+    cli.main(["--project", str(fake_project), "update"])
+    before = (fake_project / cli.LOCK_NAME).read_text()
+    assert cli.main(["--project", str(fake_project), "update", "nope"]) == 2
+    assert (fake_project / cli.LOCK_NAME).read_text() == before
+
+
+def test_pruning_says_what_it_removes(fake_project, capsys, monkeypatch):
+    """The destructive half of `update`, and it used to be the silent one:
+    scoping a run with `--root` to a file that no longer holds every
+    declaration drops the rest, printing nothing at all when the scoped set is
+    empty."""
+    cli.main(["--project", str(fake_project), "update"])
+    capsys.readouterr()
+
+    # The fixture stubs the collector, so emptying the declarations means
+    # replacing that stub rather than editing a file.
+    monkeypatch.setattr("pnix.collect.collect",
+                        lambda files, attr="pins": ({}, {}, []))
+    assert cli.main(["--project", str(fake_project), "update"]) == 0
+    err = capsys.readouterr().err
+    assert "foo: locked but no longer declared -- removing" in err
+    assert lock.read(fake_project / cli.LOCK_NAME) == {}
+
+
+def test_a_named_update_does_not_report_pruning(fake_project, capsys):
+    """`update foo` keeps every other entry by design, so nothing is removed
+    and saying so would be a lie."""
+    cli.main(["--project", str(fake_project), "update"])
+    capsys.readouterr()
+    cli.main(["--project", str(fake_project), "update", "foo"])
+    assert "no longer declared" not in capsys.readouterr().err
+
+
+def test_version_is_reportable(capsys):
+    """A pnix older than the lock refuses it outright, so `which pnix is this`
+    is the first question when that happens."""
+    from pnix import __version__
+
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--version"])
+    assert e.value.code == 0
+    assert __version__ in capsys.readouterr().out

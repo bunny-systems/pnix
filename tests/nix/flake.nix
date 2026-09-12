@@ -173,6 +173,22 @@ in
   }
 
   {
+    # The property that makes the throw usable rather than a blunt refusal: a
+    # flake naming an input in its `outputs` signature and never reading it is
+    # common, and must keep evaluating. `ownPath` is a sibling output of
+    # `fromInput` in the same fixture -- forcing it must not force the other.
+    name = "and a sibling output that never reads it still evaluates";
+    expr =
+      (fl.callFlake {
+        sourceInfo = {
+          outPath = dir + "/indirect";
+        };
+        inputs = { };
+      }).ownPath;
+    expected = dir + "/indirect";
+  }
+
+  {
     name = "the result is marked as a flake";
     expr =
       (fl.callFlake {
