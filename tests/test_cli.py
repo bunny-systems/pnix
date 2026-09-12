@@ -289,3 +289,57 @@ def test_version_is_reportable(capsys):
         cli.main(["--version"])
     assert e.value.code == 0
     assert __version__ in capsys.readouterr().out
+
+
+# --- --exclude --------------------------------------------------------------
+
+def test_exclude_holds_a_pin_at_its_locked_revision(fake_project, capsys,
+                                                     monkeypatch):
+    cli.main(["--project", str(fake_project), "update"])
+    before = lock.read(fake_project / cli.LOCK_NAME)["foo"]["rev"]
+    capsys.readouterr()
+
+    # Upstream moves; the exclusion must mean pnix never asks.
+    def boom(url, ref=None):
+        raise AssertionError("resolved an excluded pin")
+
+    monkeypatch.setattr("pnix.refs.resolve", boom)
+    assert cli.main(["--project", str(fake_project), "update",
+                     "--exclude", "foo"]) == 0
+    assert lock.read(fake_project / cli.LOCK_NAME)["foo"]["rev"] == before
+    assert "foo: excluded, keeping" in capsys.readouterr().err
+
+
+def test_excluding_a_name_that_is_not_declared_is_an_error(fake_project):
+    """Sharper than the same mistake in a positional name: a misspelled
+    exclusion updates the very pin it was meant to hold still."""
+    assert cli.main(["--project", str(fake_project), "update",
+                     "--exclude", "fooo"]) == 2
+
+
+def test_excluding_a_pin_that_was_never_locked_is_an_error(fake_project, capsys):
+    """Holding a pin still means keeping the entry it has. One with no entry
+    would simply be dropped -- the opposite of what the flag is for."""
+    assert cli.main(["--project", str(fake_project), "update",
+                     "--exclude", "foo"]) == 2
+    assert "never locked" in capsys.readouterr().err
+
+
+def test_exclude_is_repeatable(fake_project, monkeypatch, capsys):
+    cli.main(["--project", str(fake_project), "update"])
+    capsys.readouterr()
+    monkeypatch.setattr(
+        "pnix.collect.collect",
+        lambda files, attr="pins": (
+            {"foo": {"type": "github", "url": "https://github.com/o/r"},
+             "bar": {"type": "github", "url": "https://github.com/o/b"}},
+            {"foo": "/decl.nix", "bar": "/decl.nix"},
+            [],
+        ),
+    )
+    # `bar` has no entry yet, so only `foo` may be held.
+    assert cli.main(["--project", str(fake_project), "update",
+                     "--exclude", "foo", "--exclude", "bar"]) == 2
+    assert cli.main(["--project", str(fake_project), "update",
+                     "--exclude", "foo"]) == 0
+    assert set(lock.read(fake_project / cli.LOCK_NAME)) == {"foo", "bar"}

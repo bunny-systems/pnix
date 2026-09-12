@@ -199,7 +199,8 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                  roots: list[Path] | None = None,
                  prefetch: bool = True,
                  quiet: bool = True,
-                 verbose: bool = False) -> tuple[dict, dict]:
+                 verbose: bool = False,
+                 exclude: list[str] | None = None) -> tuple[dict, dict]:
     """Resolve every declared pin. Returns (resolved, previous lock contents).
 
     `prefetch=False` is what makes `pnix look` cheap: resolving a ref is one
@@ -219,15 +220,28 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         )
     pins, _ = _collect(project, roots)
 
-    if names:
-        # A name that matches nothing resolved nothing and kept every existing
-        # entry, so a typo looked exactly like a successful no-op.
-        unknown = [n for n in names if n not in pins]
-        if unknown:
-            known = ", ".join(sorted(pins)) or "none declared"
-            raise UsageError(
-                f"{', '.join(unknown)}: not a declared pin. known: {known}"
-            )
+    exclude = set(exclude or ())
+
+    # A name that matches nothing resolved nothing and kept every existing
+    # entry, so a typo looked exactly like a successful no-op. The same applies
+    # to `--exclude`, and more sharply: a misspelled exclusion updates the very
+    # pin it was meant to hold still.
+    unknown = [n for n in [*(names or ()), *sorted(exclude)] if n not in pins]
+    if unknown:
+        known = ", ".join(sorted(pins)) or "none declared"
+        raise UsageError(
+            f"{', '.join(unknown)}: not a declared pin. known: {known}"
+        )
+
+    # Holding a pin still means keeping the entry it already has. One that was
+    # never locked has no entry to keep, so excluding it would drop it from the
+    # lock -- the opposite of what the flag is for.
+    never_locked = sorted(n for n in exclude if n not in existing)
+    if never_locked:
+        raise UsageError(
+            f"{', '.join(never_locked)}: excluded but never locked, so there is "
+            f"nothing to hold. Drop the --exclude, or run once without it."
+        )
 
     # Pruning is the destructive half of `update`, and it used to be the silent
     # one: scoping a run with `--root` to a file that no longer holds every
@@ -244,6 +258,11 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         if names and name not in names:
             if name in existing:
                 result[name] = existing[name]
+            continue
+        if name in exclude:
+            result[name] = existing[name]
+            rev = (existing[name].get("rev") or "?")[:8]
+            print(f"pnix: {name}: excluded, keeping {rev}", file=sys.stderr)
             continue
         todo[name] = spec
 
@@ -301,7 +320,7 @@ def _resolve_all(project: Path, names: list[str], write: bool,
 def cmd_update(args) -> int:
     resolved, _ = _resolve_all(find_project(args.project), args.names, write=True,
                                roots=args.root, quiet=args.quiet,
-                               verbose=args.verbose)
+                               verbose=args.verbose, exclude=args.exclude)
     for name in sorted(resolved):
         for line in patches_mod.applies_to(resolved[name]):
             print(f"pnix: {name}: {line}", file=sys.stderr)
@@ -381,6 +400,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="no per-pin progress; warnings and errors still print")
     up.add_argument("-v", "--verbose", action="store_true",
                     help="also report each download as it starts")
+    up.add_argument("--exclude", action="append", metavar="NAME", default=None,
+                    help="hold this pin at its locked revision; repeatable")
     up.set_defaults(func=cmd_update)
 
     it = sub.add_parser("init", help="vendor the resolver into this project")

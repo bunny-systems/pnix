@@ -72,6 +72,8 @@ pnix look                    report drift; writes nothing, downloads nothing
 | `--force` | `init` | overwrite files that lost their pnix marker |
 | `--version` | — | print the version and exit |
 | `-q`, `--quiet` | `update` | no per-pin progress; warnings and errors still print |
+| `-v`, `--verbose` | `update` | also report each download as it starts |
+| `--exclude NAME` | `update` | hold this pin at its locked revision; repeatable |
 | `names…` | `update` | update only these pins; the rest keep their locked entry |
 
 `update` reports each pin on stderr as it lands, and announces a download
@@ -79,18 +81,22 @@ before it starts, since that is where the ~20 s of a full run goes:
 
 ```
 pnix: resolving 3 pins
-  fetching hjem...
-  fetching systems...
-  [1/3] systems: new -> 31732fcf
-  [2/3] hjem: new -> d248f0e4
-  fetching nixpkgs...
-  [3/3] nixpkgs: new -> 8ce4ef6c
-pnix: 3 pins resolved, 3 changed, 14.5s
+  [1/3] systems  new       31732fcf
+  [2/3] hjem     updated   d248f0e4 -> e5e30b43
+  [3/3] nixpkgs  unchanged 8ce4ef6c
+pnix: 3 pins resolved -- 1 new, 1 updated, 1 unchanged, 14.5s
 ```
 
-Pins resolve concurrently, so the order is whatever finishes first. `-q`
-silences it; warnings and errors still print. stdout stays empty, so
-redirecting it captures only what you asked for.
+Pins resolve concurrently, so the order is whatever finishes first. `-v` adds a
+`fetching X...` line before each download, which is where the time goes; `-q`
+silences everything. stdout stays empty, so redirecting it captures only what
+you asked for.
+
+`--exclude NAME` is the inverse of naming pins: everything moves *except* that
+one, which is not resolved at all and keeps its entry verbatim. An unknown name
+is refused, since a misspelled exclusion would update the pin it was meant to
+hold; so is excluding a pin that was never locked, since there is no entry to
+keep and it would be dropped instead.
 
 `update` uses `nix flake prefetch` when the flakes feature happens to be
 enabled, and falls back to the stable CLI when it is not. Purely a speed
