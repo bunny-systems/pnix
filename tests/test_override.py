@@ -40,7 +40,8 @@ def _eval(attr: str, env_value: str | None, extra: dict | None = None):
     # Inherit the real environment -- nix-instantiate has to be on PATH -- and
     # control only the variables under test.
     env = dict(os.environ)
-    env.pop("PNIX_OVERRIDE", None)
+    for name in ("PNIX_OVERRIDE", "PNIX_OVERRIDES", "TACK_OVERRIDES"):
+        env.pop(name, None)
     env.update(extra or {})
     if env_value is not None:
         env["PNIX_OVERRIDE"] = env_value
@@ -102,7 +103,7 @@ def test_it_says_which_inputs_it_overrode():
     [
         ("nosuchpin=/tmp", "is not a pin"),
         ("dep", "not of the form"),
-        ("dep=relative/path", "not an absolute path"),
+        ("dep=relative/path", "neither an absolute path nor a repository URL"),
         ("dep=/definitely/not/here", "no such directory"),
     ],
 )
@@ -112,3 +113,64 @@ def test_a_bad_override_throws_rather_than_being_ignored(value, expected):
     proc = _eval("dep.marker", value)
     assert proc.returncode != 0
     assert expected in proc.stderr
+
+
+# --- a near-miss variable name ---------------------------------------------
+
+def test_the_plural_name_is_caught_rather_than_ignored():
+    """`PNIX_OVERRIDES` is tack's spelling, and muscle memory outlives a
+    migration. pnix cannot warn about a variable it does not read, so it looks
+    for this one deliberately -- measured on a real migration, where the plural
+    produced a completely normal-looking build off the locked rev, with no
+    trace and no error."""
+    proc = _eval("dep.marker", None, {"PNIX_OVERRIDES": "dep=/tmp"})
+    assert proc.returncode != 0
+    assert "PNIX_OVERRIDES is set" in proc.stderr
+    assert "no trailing S" in proc.stderr
+
+
+def test_tacks_variable_is_caught_too():
+    proc = _eval("dep.marker", None, {"TACK_OVERRIDES": "dep=/tmp"})
+    assert proc.returncode != 0
+    assert "TACK_OVERRIDES is set" in proc.stderr
+
+
+def test_the_real_variable_wins_over_a_near_miss():
+    """Both set is not an error: the correct one is unambiguous."""
+    proc = _eval("dep.marker", f"dep={FLAKES}/mono/sub",
+                 {"PNIX_OVERRIDES": "dep=/nonsense"})
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- a repository URL -------------------------------------------------------
+#
+# The line an override draws is transient versus recorded, not local versus
+# remote: nothing here reaches the lock either way. Refusing a URL rested on
+# tack resolving one with `builtins.getFlake`, which confused that tool's
+# implementation needing flakes with the feature needing them -- `fetchGit`
+# does it with no hash and no experimental feature.
+
+def test_a_url_with_no_fragment_is_accepted(local_repo):
+    proc = _eval("dep.outPath", f"dep=file://{local_repo}")
+    assert proc.returncode == 0, proc.stderr
+    assert "/nix/store/" in proc.stdout
+
+
+def test_a_url_fragment_may_be_a_ref(local_repo):
+    proc = _eval("dep.outPath", f"dep=file://{local_repo}#main")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_url_fragment_may_be_a_rev(local_repo, local_repo_head):
+    """A rev needs allRefs, since fetchGit otherwise looks only at the default
+    branch -- and the interesting revs (a PR head, a fork) are exactly the ones
+    that are not on it."""
+    proc = _eval("dep.outPath", f"dep=file://{local_repo}#{local_repo_head}")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_url_and_a_path_reach_the_same_tree(local_repo, local_repo_head):
+    """The two override forms are interchangeable when they name one tree."""
+    by_url = _eval("dep.outPath", f"dep=file://{local_repo}#{local_repo_head}")
+    assert by_url.returncode == 0, by_url.stderr
+    assert by_url.stdout.strip().strip('"').startswith("/nix/store/")

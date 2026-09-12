@@ -159,3 +159,30 @@ def test_an_explicit_rev_records_no_ref(local_repo):
     """pnix does not know which branch someone else's rev lives on, so allRefs
     stays the only way to find it."""
     assert refs.resolve_for(f"file://{local_repo}", {"rev": "f" * 40}) == {"rev": "f" * 40}
+
+
+def test_an_explicit_rev_keeps_what_it_was_declared_alongside():
+    """`rev` wins, but dropping the strategy it accompanied meant a pin frozen
+    at a pull-request head recorded the rev and nothing about the PR -- the one
+    thing a reader needs later, and exactly the gap that made tack's lock
+    unusable as a source when translating declarations."""
+    out = refs.resolve_for("u", {"rev": "a" * 40, "ref": "refs/pull/181/head"})
+    assert out == {"rev": "a" * 40, "ref": "refs/pull/181/head"}
+
+    assert refs.resolve_for("u", {"rev": "b" * 40, "tag": "v1.2.3"}) == {
+        "rev": "b" * 40, "tag": "v1.2.3",
+    }
+    assert refs.resolve_for("u", {"rev": "c" * 40, "release": "^1.2"}) == {
+        "rev": "c" * 40, "release": "^1.2",
+    }
+
+
+def test_an_explicit_rev_alone_still_records_only_the_rev():
+    assert refs.resolve_for("u", {"rev": "d" * 40}) == {"rev": "d" * 40}
+
+
+def test_an_explicit_rev_needs_no_network(monkeypatch):
+    """It is the one strategy that answers without asking the remote."""
+    monkeypatch.setattr(refs, "_ls_remote",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("network")))
+    assert refs.resolve_for("u", {"rev": "e" * 40, "ref": "main"})["rev"] == "e" * 40

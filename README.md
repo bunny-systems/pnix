@@ -565,14 +565,39 @@ import ./.pnix { overrides = { finix = ../finix; }; }
 PNIX_OVERRIDE=finix=/home/nimeses/Projects/nix/finix nh os switch
 PNIX_OVERRIDE="finix=~/Projects/nix/finix,hjem=/tmp/hjem" nix-instantiate …
 
+# a repo URL works too, optionally #<ref-or-rev> — try a PR without locking it
+PNIX_OVERRIDE=finix=https://github.com/finix-community/finix#refs/pull/181/head nh os switch
+PNIX_OVERRIDE=finix=https://github.com/finix-community/finix#34156d814e6d nh os switch
+
 # Escalating first drops it: sudo and doas both reset the environment, and an
 # unset variable is indistinguishable from no override at all. Set it past the
 # boundary instead.
 sudo env PNIX_OVERRIDE=finix=/home/nimeses/Projects/nix/finix nixos-rebuild switch --file .
 ```
 
-Absolute paths only (`~/` is expanded in the variable). A remote ref is what the
-lock is for; these are the escape hatch for a working tree.
+An absolute path (`~/` is expanded) or a repository URL. `#` separates the ref,
+because it cannot appear in a git URL where `@` can (`git@github.com:o/r`);
+a 7–40 character hex fragment is taken as a rev, anything else as a ref.
+
+**The line is transient versus recorded, not local versus remote.** Nothing here
+reaches the lock in either form. A source you keep reaching for belongs in a
+declaration — which is equally true of a path, and why a `path` pin warns.
+
+To *lock* a revision, declare it. `rev` wins over `tag`/`release`/`ref`, and the
+strategy it accompanies is kept as provenance, so a pin frozen at a pull-request
+head still records the PR it came from:
+
+```nix
+pins.finix = {
+  url = "https://github.com/finix-community/finix";
+  ref = "refs/pull/181/head";   # what it tracks
+  rev = "34156d814e6d…";        # frozen here
+};
+```
+
+A near-miss variable name is caught rather than ignored — `PNIX_OVERRIDES` and
+`TACK_OVERRIDES` both throw, since pnix cannot warn about a variable it does not
+read and the plural is what a tack migrant's fingers type.
 
 All of them override **resolution, not declaration** — nothing is re-locked, and
 changing a rev is still `pnix update`. Every failure throws: an unknown pin name

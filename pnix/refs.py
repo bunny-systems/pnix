@@ -148,7 +148,16 @@ def resolve_for(url: str, spec: dict) -> dict:
     release list.
     """
     if spec.get("rev"):
-        return {"rev": spec["rev"]}
+        # An explicit rev wins, but whatever it was declared *alongside* is
+        # carried through as provenance. Dropping it meant a pin frozen at a
+        # pull-request head recorded the rev and nothing about the PR -- which
+        # is the one thing a reader needs six months later, and exactly the gap
+        # that made tack's lock unusable as a migration source.
+        out = {"rev": spec["rev"]}
+        for key in ("ref", "tag", "release"):
+            if spec.get(key):
+                out[key] = spec[key]
+        return out
 
     tag = spec.get("tag")
     if tag:
