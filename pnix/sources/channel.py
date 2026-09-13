@@ -28,6 +28,7 @@ BASE = "https://channels.nixos.org"
 class Channel:
     type = "channel"
     kinds = ("tarball",)
+    prefetch_keys = ("hash", "lastModified")
 
     def _url(self, spec: dict) -> str:
         base = spec.get("url") or BASE

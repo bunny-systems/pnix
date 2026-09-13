@@ -141,7 +141,7 @@ class Progress:
         self.quiet = quiet or total == 0
         self.verbose = verbose and not self.quiet
         self.done = 0
-        self.counts = {"new": 0, "updated": 0, "unchanged": 0}
+        self.counts = dict.fromkeys(Progress.STATES, 0)
         self.width = 0
         self.started = time.monotonic()
         self._lock = threading.Lock()
@@ -163,14 +163,27 @@ class Progress:
 
     #: A pin has no upstream to be "ahead" or "diverged" *of* -- the lock holds
     #: one rev, and saying more would mean a commit-graph walk per pin.
-    STATES = ("new", "updated", "unchanged")
+    STATES = ("new", "updated", "repaired", "relocked", "unchanged")
 
-    def finish(self, name: str, before: dict, after: dict) -> None:
+    def finish(self, name: str, before: dict, after: dict,
+               repaired: bool = False) -> None:
         old, new = before.get("rev"), after.get("rev")
         if not before:
             state, detail = "new", (new or "?")[:8]
         elif old == new:
-            state, detail = "unchanged", (old or "?")[:8]
+            # Three different things share "the rev did not move", and calling
+            # them all `unchanged` is how a frozen entry stayed invisible.
+            # `repaired` is specifically a node missing something `prefetch`
+            # should have produced; a declaration edit rewrites the entry too,
+            # and naming that a repair would say something was broken when
+            # nothing was.
+            short = (old or "?")[:8]
+            if repaired:
+                state, detail = "repaired", f"{short}  (refilled)"
+            elif before == after:
+                state, detail = "unchanged", short
+            else:
+                state, detail = "relocked", f"{short}  (declaration changed)"
         else:
             state, detail = "updated", f"{(old or '?')[:8]} -> {(new or '?')[:8]}"
 
@@ -281,7 +294,20 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         locked = src.resolve(spec)
 
         prior = existing.get(name, {})
+        # Missing something `prefetch` should have produced: stale however well
+        # the fetch fields match, or the entry is frozen incomplete forever.
+        incomplete = bool(prior) and not all(
+            k in prior for k in getattr(src, "prefetch_keys", ())
+        )
+        # `_unchanged` compares the *fetch* fields, which are precisely the ones
+        # CARRIED_FIELDS are not. Without this, an edit adding only
+        # `excludeFollow` or `dir` is reported unchanged and never written, so
+        # the declaration silently has no effect -- and for `dir` that means a
+        # flake kept being looked for in the wrong directory.
+        carried_stale = any(prior.get(k) != spec.get(k) for k in CARRIED_FIELDS)
         if (_unchanged(spec, prior)
+                and not incomplete
+                and not carried_stale
                 and prior.get("rev") == locked.get("rev")
                 and not _patches_changed(spec, prior)):
             progress.finish(name, prior, prior)
@@ -302,7 +328,7 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                 # Resolved after `fetch` so a patch node can be compared
                 # against the source it applies to when `look` reports drift.
                 locked["patches"] = patches_mod.resolve(spec, name, project)
-        progress.finish(name, prior, locked)
+        progress.finish(name, prior, locked, repaired=incomplete)
         return name, locked
 
     if todo:

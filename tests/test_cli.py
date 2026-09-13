@@ -343,3 +343,99 @@ def test_exclude_is_repeatable(fake_project, monkeypatch, capsys):
     assert cli.main(["--project", str(fake_project), "update",
                      "--exclude", "foo"]) == 0
     assert set(lock.read(fake_project / cli.LOCK_NAME)) == {"foo", "bar"}
+
+
+# --- a lock entry that update used to freeze --------------------------------
+#
+# Reported in the wild: a nixpkgs pin whose entry had a hash and a rev but no
+# `lastModified` built as `nixos-system-...-26.11.19700101.eaad089` forever,
+# and every `pnix update` said "unchanged". `_unchanged` only checks the fetch
+# fields, so the entry was returned verbatim and prefetch never ran again.
+
+def test_update_refills_an_entry_missing_what_prefetch_produces(fake_project,
+                                                                 capsys):
+    cli.main(["--project", str(fake_project), "update"])
+    path = fake_project / cli.LOCK_NAME
+    entry = lock.read(path)["foo"]
+    assert "lastModified" in entry
+
+    lock.write(path, {"foo": {k: v for k, v in entry.items()
+                              if k != "lastModified"}})
+    capsys.readouterr()
+
+    cli.main(["--project", str(fake_project), "update"])
+    healed = lock.read(path)["foo"]
+    assert healed["lastModified"] == entry["lastModified"]
+    assert healed["rev"] == entry["rev"], "the rev must not move to repair it"
+    assert "repaired" in capsys.readouterr().err
+
+
+def test_adding_a_carried_field_reaches_the_lock(fake_project, capsys,
+                                                  monkeypatch):
+    """`_unchanged` compares the *fetch* fields, which are precisely the ones
+    CARRIED_FIELDS are not -- so an edit adding only `excludeFollow` or `dir`
+    was reported unchanged and never written, and the declaration silently had
+    no effect. For `dir` that means a flake kept being looked for in the wrong
+    directory with nothing to show for it."""
+    cli.main(["--project", str(fake_project), "update"])
+    assert "dir" not in lock.read(fake_project / cli.LOCK_NAME)["foo"]
+    capsys.readouterr()
+
+    monkeypatch.setattr(
+        "pnix.collect.collect",
+        lambda files, attr="pins": (
+            {"foo": {"type": "github", "url": "https://github.com/o/r",
+                     "ref": "main", "dir": "sub",
+                     "excludeFollow": ["nixpkgs"]}},
+            {"foo": "/decl.nix"}, [],
+        ),
+    )
+    cli.main(["--project", str(fake_project), "update"])
+    entry = lock.read(fake_project / cli.LOCK_NAME)["foo"]
+    assert entry["dir"] == "sub" and entry["excludeFollow"] == ["nixpkgs"]
+    assert "relocked" in capsys.readouterr().err
+
+
+def test_removing_a_carried_field_also_reaches_the_lock(fake_project,
+                                                         monkeypatch):
+    """The other direction: dropping `excludeFollow` must stop excluding."""
+    decl = {"type": "github", "url": "https://github.com/o/r", "ref": "main",
+            "excludeFollow": ["nixpkgs"]}
+    monkeypatch.setattr("pnix.collect.collect",
+                        lambda files, attr="pins": ({"foo": decl},
+                                                    {"foo": "/decl.nix"}, []))
+    cli.main(["--project", str(fake_project), "update"])
+    assert lock.read(fake_project / cli.LOCK_NAME)["foo"]["excludeFollow"]
+
+    monkeypatch.setattr(
+        "pnix.collect.collect",
+        lambda files, attr="pins": (
+            {"foo": {k: v for k, v in decl.items() if k != "excludeFollow"}},
+            {"foo": "/decl.nix"}, [],
+        ),
+    )
+    cli.main(["--project", str(fake_project), "update"])
+    assert "excludeFollow" not in lock.read(fake_project / cli.LOCK_NAME)["foo"]
+
+
+def test_repaired_means_only_a_refilled_entry(fake_project, capsys):
+    """A routine declaration edit must not be reported under a word that says
+    something was broken."""
+    cli.main(["--project", str(fake_project), "update"])
+    capsys.readouterr()
+    path = fake_project / cli.LOCK_NAME
+    entry = lock.read(path)["foo"]
+    lock.write(path, {"foo": {k: v for k, v in entry.items()
+                              if k != "lastModified"}})
+    cli.main(["--project", str(fake_project), "update"])
+    err = capsys.readouterr().err
+    assert "repaired" in err and "relocked" not in err
+
+
+def test_every_fetching_source_declares_a_hash_in_prefetch_keys():
+    """A source that produces fields but declares none can never be repaired."""
+    from pnix import sources
+
+    for name, src in sources.SOURCES.items():
+        if {"tarball", "file"} & set(src.kinds):
+            assert "hash" in set(getattr(src, "prefetch_keys", ())), name

@@ -35,6 +35,7 @@ class _Url:
 class Tarball(_Url):
     type = "tarball"
     kinds = ("tarball",)
+    prefetch_keys = ("hash", "lastModified")
 
     def prefetch(self, locked: dict) -> dict:
         url = locked.get("resolvedUrl") or locked["url"]
@@ -48,6 +49,7 @@ class Tarball(_Url):
 class File(_Url):
     type = "file"
     kinds = ("file",)
+    prefetch_keys = ("hash",)
 
     def prefetch(self, locked: dict) -> dict:
         url = locked.get("resolvedUrl") or locked["url"]

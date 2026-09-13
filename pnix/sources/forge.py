@@ -23,6 +23,7 @@ class ArchiveForge:
     forge: str | None = None
 
     kinds = ("tarball",)
+    prefetch_keys = ("hash", "lastModified")
 
     def archive_url(self, locked: dict) -> str:
         raise NotImplementedError

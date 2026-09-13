@@ -126,6 +126,23 @@ is refused, since a misspelled exclusion would update the pin it was meant to
 hold; so is excluding a pin that was never locked, since there is no entry to
 keep and it would be dropped instead.
 
+A pin whose rev has not moved is reported `unchanged` and left alone — with two
+exceptions, because "the rev did not move" covers three different things:
+
+- `repaired` — the entry was missing something the fetch should have produced
+  (`hash`, `lastModified`). Refetched and refilled; the rev is untouched.
+- `relocked` — the declaration changed in a way that does not affect *what* is
+  fetched (`excludeFollow`, `dir`, `follows`, `flake`, `importable`). Rewritten.
+
+Both used to be reported `unchanged` and skipped, which meant an incomplete
+entry stayed incomplete forever — a nixpkgs pin in that state builds as
+`nixos-system-…-26.11.19700101.<rev>` indefinitely — and an edit adding only
+`excludeFollow` or `dir` never reached the lock, so the declaration silently had
+no effect.
+
+Repair only reaches pins the run resolves: `--exclude` and a named update keep
+their entries verbatim, broken or not. A bare `pnix update` is the repair pass.
+
 `update` uses `nix flake prefetch` when the flakes feature happens to be
 enabled, and falls back to the stable CLI when it is not. Purely a speed
 matter — hashing nixpkgs costs ~25 s of unpack-and-NAR-hash through

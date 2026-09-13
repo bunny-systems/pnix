@@ -25,6 +25,16 @@ class Source(Protocol):
     #: fetch primitives this source can emit
     kinds: tuple[str, ...]
 
+    #: Fields `prefetch` is expected to add. `update` refetches a locked entry
+    #: that is missing any of them instead of reporting it unchanged.
+    #:
+    #: Without this an entry is frozen incomplete: `_unchanged` only checks that
+    #: the fetch fields match, so it is returned verbatim on every run. Measured
+    #: in the wild -- a nixpkgs pin with a hash and no `lastModified` builds as
+    #: `nixos-system-...-26.11.19700101.<rev>` forever while `pnix update` keeps
+    #: saying "unchanged". Only a moving rev or deleting the lock broke out.
+    prefetch_keys: tuple[str, ...] = ()
+
     def resolve(self, spec: dict) -> dict:
         """Declaration -> locked node. No hash, no download."""
         ...
