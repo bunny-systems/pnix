@@ -1,5 +1,6 @@
 import subprocess
 import tarfile
+import typing
 
 import pytest
 
@@ -78,6 +79,7 @@ def test_every_request_carries_a_user_agent(monkeypatch, tmp_path):
 
     class Resp:
         url = "https://example.invalid/x"
+        headers: typing.ClassVar[dict[str, str]] = {}
 
         def read(self):
             return b""
@@ -94,11 +96,12 @@ def test_every_request_carries_a_user_agent(monkeypatch, tmp_path):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(prefetch, "_hash_local", lambda *a: "sha256-X")
+    monkeypatch.setattr(prefetch, "_FAST", False)
 
     prefetch.resolve_redirect("https://example.invalid/x")
     prefetch.tarball("https://example.invalid/x.tar.gz")
 
-    assert len(seen) == 2
+    assert len(seen) == 3
     for req in seen:
         assert req.get_header("User-agent") == USER_AGENT
 
@@ -213,3 +216,64 @@ def test_unparseable_output_falls_back_rather_than_guessing(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", lambda *a, **k: Proc())
     assert prefetch._fast_tarball("https://example.invalid/x.tar.gz") is None
+
+
+# --- an archive with no usable date -----------------------------------------
+
+def test_a_reproducible_archive_falls_back_to_the_server_date(monkeypatch):
+    """Reported from the wild: a channel-pinned nixpkgs reported itself as
+    `26.11.19800101.dirty`. Nix channel tarballs stamp every entry at
+    1980-01-01, and reading that back puts 19800101 straight into nixpkgs'
+    version string. `nix flake prefetch` says 315532800 for these too, so this
+    is not a disagreement between pnix's two paths -- it is pnix doing better
+    than the archive allows."""
+    monkeypatch.setattr(prefetch, "_FAST", False)
+    monkeypatch.setattr(prefetch, "_archive_mtime", lambda blob: 315532800)
+    monkeypatch.setattr(prefetch, "_hash_local", lambda *a: "sha256-X")
+    monkeypatch.setattr(prefetch, "_header_mtime", lambda url: 1789100180)
+
+    class Resp:
+        def read(self):
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: Resp())
+    assert prefetch.tarball("https://example.invalid/x.tar.xz")[1] == 1789100180
+
+
+def test_a_real_archive_date_is_left_alone(monkeypatch):
+    """A forge archive stamps the commit date, which is better than any header."""
+    monkeypatch.setattr(prefetch, "_FAST", False)
+    monkeypatch.setattr(prefetch, "_archive_mtime", lambda blob: 1788914643)
+    monkeypatch.setattr(prefetch, "_hash_local", lambda *a: "sha256-X")
+    monkeypatch.setattr(prefetch, "_header_mtime",
+                        lambda url: (_ for _ in ()).throw(AssertionError("asked")))
+
+    class Resp:
+        def read(self):
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: Resp())
+    assert prefetch.tarball("https://example.invalid/x.tar.gz")[1] == 1788914643
+
+
+def test_the_fast_path_gets_the_same_treatment(monkeypatch):
+    """Nix reports the sentinel too, so fixing only the stable path would make
+    the two disagree -- the one property the fast path must never break."""
+    monkeypatch.setattr(prefetch, "_fast_tarball",
+                        lambda url: ("sha256-X", 315532800))
+    monkeypatch.setattr(prefetch, "_header_mtime", lambda url: 1789100180)
+    assert prefetch.tarball("https://example.invalid/x.tar.xz") == (
+        "sha256-X", 1789100180,
+    )

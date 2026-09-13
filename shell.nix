@@ -1,6 +1,10 @@
 # Dev shell, usable as `nix-shell` or through `nix develop`.
 {
-  pkgs ? (import ./. { }).pkgs,
+  sources ? import ./.pnix { },
+  pkgs ? import sources.nixpkgs {
+    config = { };
+    overlays = [ ];
+  },
 }:
 pkgs.mkShell {
   packages = [

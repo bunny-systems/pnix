@@ -15,7 +15,15 @@ python3Packages.buildPythonApplication {
   version = "0.1.0";
   pyproject = true;
 
-  src = lib.cleanSource ./.;
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.intersection (lib.fileset.unions [
+      ./pnix
+      ./pyproject.toml
+      ./README.md
+      ./LICENSE
+    ]) (lib.fileset.fileFilter (f: !(lib.hasSuffix ".pyc" f.name)) ./.);
+  };
 
   build-system = [ python3Packages.setuptools ];
 
