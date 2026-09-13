@@ -1,37 +1,33 @@
-# A passthrough over default.nix, kept only so `nix develop` and `nix build`
-# work for people who expect them.
-#
-# **It has no inputs.** nixpkgs is pinned in .pnix/pins.lock.json by pnix itself, so
-# there is nothing for a flake.lock to hold and nothing that needs the flakes
-# feature to resolve. Everything here is also reachable without it:
-#
-#   nix-shell                      instead of  nix develop
-#   nix-build -A packages.default  instead of  nix build
+# Flake entrypoint for pnix.
+# Not recommended to add as an actual flake input -- just kept for `nix run`, `nix develop`, and `nix fmt`.
 {
-  description = "pnix — Nix-native input pinning. See default.nix; this file only forwards to it.";
-
   outputs =
     { self }:
     let
+      inherit (import ./.pnix { }) nixpkgs;
       systems = [
         "x86_64-linux"
         "aarch64-linux"
         "x86_64-darwin"
         "aarch64-darwin"
       ];
-      each =
+      forEachSystem =
         f:
         builtins.listToAttrs (
           map (system: {
             name = system;
-            value = f system;
+            value = f (import nixpkgs { inherit system; });
           }) systems
         );
-      entry = system: import ./. { inherit system; };
     in
     {
-      packages = each (system: (entry system).packages);
-      devShells = each (system: (entry system).devShells);
-      formatter = each (system: (entry system).formatter);
+      packages = forEachSystem (pkgs: {
+        pnix = pkgs.callPackage ./package.nix { };
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.pnix;
+      });
+      devShells = forEachSystem (pkgs: {
+        default = import ./shell.nix { inherit pkgs; };
+      });
+      formatter = forEachSystem (pkgs: pkgs.nixfmt-tree);
     };
 }

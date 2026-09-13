@@ -8,28 +8,56 @@ No `lib`, no `evalModules`, no flakes, no runtime dependency beyond `git` and
 
 ---
 
-## Running it
+## Installing pnix
+The recommended way to install `pnix` is within your project's development shell, but you'll need to first bootstrap nixpkgs and pnix in order to do that.
 
-```sh
-nix-build -A packages.default && ./result/bin/pnix --help    # from a checkout
-nix-env -f . -iA packages.default                            # into your profile
+First, add the required pins to any file in your repo (ex. `pins.nix`):
+```nix
+{
+  pins.nixpkgs = {
+    url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
+    type = "tarball";
+  };
+
+  pins.pnix = {
+    url = "https://github.com/bunny-systems/pnix";
+    # pnix's flake isn't intended for consumption.
+    flake = false;
+  };
+}
 ```
 
-Straight from a remote, no checkout and no flakes — `default.nix` resolves its
-own nixpkgs from its own lock, so nothing else is needed:
+Then, temporarily install pnix and use it to pin nixpkgs and this repo:
 
+Without nix-command enabled:
 ```sh
-nix-env -f https://forgejo.example.com/you/pnix/archive/main.tar.gz -iA packages.default
-nix run "git+https://forgejo.example.com/you/pnix" -- --help    # flakes, if you prefer
+nix-build "https://github.com/bunny-systems/pnix/archive/main.tar.gz"
+./result/bin/pnix init
+./result/bin/pnix update
+rm result
 ```
 
-Swap `main` for a rev to pin it.
+With nix-command enabled (recommended):
+```sh
+nix run github:bunny-systems/pnix -- init
+nix run github:bunny-systems/pnix -- update
+```
 
-`--project` comes **before** the subcommand. It defaults to the nearest
-directory at or above the working directory containing `.pnix/`, so `update`
-and `look` work from anywhere inside a repo — `git status` rules. `init` is the
-exception: it has to run where no `.pnix/` exists yet, so it takes the working
-directory.
+Finally, add pnix to your shell:
+```nix
+# shell.nix
+{
+  sources ? import ./.pnix { },
+  pkgs ? import sources.nixpkgs { },
+}:
+pkgs.mkShell {
+  packages = [
+    (pkgs.callPackage "${sources.pnix}/package.nix" { })
+  ];
+}
+```
+
+Now, pnix will be abvailable in your path whenever you run `nix-shell`.
 
 ### This repo has no flake inputs
 
