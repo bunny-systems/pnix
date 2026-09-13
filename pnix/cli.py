@@ -328,7 +328,24 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                 # Resolved after `fetch` so a patch node can be compared
                 # against the source it applies to when `look` reports drift.
                 locked["patches"] = patches_mod.resolve(spec, name, project)
-        progress.finish(name, prior, locked, repaired=incomplete)
+
+        # A repair that produced nothing is not a repair. Saying "repaired"
+        # while writing back an identical entry is how a pin stayed broken
+        # across several runs, each of them reporting success.
+        still_missing = [
+            k for k in getattr(src, "prefetch_keys", ()) if k not in locked
+        ]
+        if prefetch and still_missing:
+            print(
+                f"pnix: {name}: no {', '.join(still_missing)} could be "
+                f"determined for this source. A pin without `lastModified` "
+                f"builds as `...19700101.<rev>`; please report the url and "
+                f"`nix --version`.",
+                file=sys.stderr,
+            )
+        progress.finish(
+            name, prior, locked, repaired=incomplete and not still_missing
+        )
         return name, locked
 
     if todo:

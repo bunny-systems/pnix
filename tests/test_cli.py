@@ -439,3 +439,29 @@ def test_every_fetching_source_declares_a_hash_in_prefetch_keys():
     for name, src in sources.SOURCES.items():
         if {"tarball", "file"} & set(src.kinds):
             assert "hash" in set(getattr(src, "prefetch_keys", ())), name
+
+
+def test_a_repair_that_produced_nothing_says_so(fake_project, capsys,
+                                                 monkeypatch):
+    """Reported from the wild twice over: the first run wrote entries with no
+    `lastModified`, and the run after the repair landed said "repaired" for
+    every one of them while writing back identical entries. A repair that
+    filled nothing must not report success."""
+    monkeypatch.setattr("pnix.prefetch.tarball", lambda url: ("sha256-AAA", None))
+    cli.main(["--project", str(fake_project), "update"])
+    err = capsys.readouterr().err
+    assert "no lastModified could be determined" in err
+    assert "repaired" not in err
+
+
+def test_a_repair_that_filled_the_gap_is_still_reported(fake_project, capsys):
+    cli.main(["--project", str(fake_project), "update"])
+    path = fake_project / cli.LOCK_NAME
+    entry = lock.read(path)["foo"]
+    lock.write(path, {"foo": {k: v for k, v in entry.items()
+                              if k != "lastModified"}})
+    capsys.readouterr()
+    cli.main(["--project", str(fake_project), "update"])
+    err = capsys.readouterr().err
+    assert "repaired" in err
+    assert "could be determined" not in err
