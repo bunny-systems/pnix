@@ -277,3 +277,44 @@ def test_the_fast_path_gets_the_same_treatment(monkeypatch):
     assert prefetch.tarball("https://example.invalid/x.tar.xz") == (
         "sha256-X", 1789100180,
     )
+
+
+def test_a_fast_path_that_reports_no_date_falls_through(monkeypatch):
+    """Whether `nix flake prefetch` reports `lastModified` for a `tarball+` ref
+    differs by Nix implementation and version, and GitHub's codeload endpoint
+    sends an ETag with no `Last-Modified`, so neither the shortcut nor the
+    header can be relied on for a forge archive. Reported from the wild: a lock
+    where all 27 pins had a hash and no date, building as
+    `nixos-system-...-26.11.19700101.<rev>` however often it was regenerated.
+    """
+    monkeypatch.setattr(prefetch, "_fast_tarball", lambda url: ("sha256-X", None))
+    monkeypatch.setattr(prefetch, "_header_mtime", lambda url: None)
+    monkeypatch.setattr(prefetch, "_archive_mtime", lambda blob: 1781152676)
+    monkeypatch.setattr(prefetch, "_hash_local", lambda *a: "sha256-FROM-ARCHIVE")
+
+    class Resp:
+        headers: typing.ClassVar[dict[str, str]] = {}
+
+        def read(self):
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: Resp())
+    sri, mtime = prefetch.tarball("https://example.invalid/x.tar.gz")
+    assert mtime == 1781152676, "must read the archive rather than give up"
+    assert sri == "sha256-FROM-ARCHIVE"
+
+
+def test_a_fast_path_with_a_date_still_short_circuits(monkeypatch):
+    """The fall-through costs a download, so it must only happen when there is
+    no date to be had."""
+    monkeypatch.setattr(prefetch, "_fast_tarball", lambda url: ("sha256-X", 1788914643))
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("downloaded anyway")))
+    assert prefetch.tarball("https://example.invalid/x.tar.gz") == ("sha256-X", 1788914643)

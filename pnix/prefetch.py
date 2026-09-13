@@ -254,7 +254,16 @@ def tarball(url: str) -> tuple[str, int | None]:
         sri, mtime = fast
         if mtime is None or mtime < MTIME_FLOOR:
             mtime = _header_mtime(url) or mtime
-        return sri, mtime
+        if mtime is not None:
+            return sri, mtime
+        # `nix flake prefetch` answered but told us no date, and the server has
+        # none either -- GitHub's codeload endpoint sends an ETag and no
+        # `Last-Modified`. Whether Nix reports one for a `tarball+` ref differs
+        # by implementation and version, so the shortcut cannot be trusted for
+        # it: reported from the wild as a lock where all 27 pins had a hash and
+        # no `lastModified`, building as `...26.11.19700101.<rev>` forever.
+        # Fall through and read the archive, which is where the commit date
+        # actually lives. Costs the download the fast path was avoiding.
 
     try:
         with urllib.request.urlopen(_request(url), timeout=120) as resp:
