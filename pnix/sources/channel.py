@@ -18,6 +18,8 @@ A channel tarball is a prebuilt nixpkgs expression tree, not a git checkout: no
 `rev`, and its `lastModified` is whatever the archive carries.
 """
 
+import re
+
 from pnix import prefetch
 
 BASE = "https://channels.nixos.org"
@@ -42,6 +44,9 @@ class Channel:
         parts = resolved.rstrip("/").split("/")
         if len(parts) >= 2:
             locked["version"] = parts[-2]
+            tail = locked["version"].rsplit(".", 1)[-1]
+            if re.fullmatch(r"[0-9a-f]{7,40}", tail):
+                locked["rev"] = tail
         return locked
 
     def prefetch(self, locked: dict) -> dict:

@@ -35,8 +35,14 @@ def _expr(attrpath: str) -> str:
 
 
 def _eval(attr: str, env_value: str | None, extra: dict | None = None):
-    expr = ROOT / "tests" / "_override_expr.nix"
-    expr.write_text(_expr(attr))
+    """Evaluate the expression directly rather than through a scratch file.
+
+    This used to write `tests/_override_expr.nix` and remove it in a `finally`,
+    which is fine until pytest is killed before the `finally` runs -- then an
+    untracked, un-gitignored `.nix` file sits in the repo waiting for someone's
+    `git add -A`. The expression carries only absolute paths, so there was never
+    a reason for it to be on disk.
+    """
     # Inherit the real environment -- nix-instantiate has to be on PATH -- and
     # control only the variables under test.
     env = dict(os.environ)
@@ -45,14 +51,11 @@ def _eval(attr: str, env_value: str | None, extra: dict | None = None):
     env.update(extra or {})
     if env_value is not None:
         env["PNIX_OVERRIDE"] = env_value
-    try:
-        return subprocess.run(
-            ["nix-instantiate", "--eval", "--strict", "--json", str(expr),
-             *NO_EXPERIMENTAL],
-            capture_output=True, text=True, check=False, env=env,
-        )
-    finally:
-        expr.unlink(missing_ok=True)
+    return subprocess.run(
+        ["nix-instantiate", "--eval", "--strict", "--json",
+         "--expr", _expr(attr), *NO_EXPERIMENTAL],
+        capture_output=True, text=True, check=False, env=env,
+    )
 
 
 def test_without_the_variable_the_lock_wins():

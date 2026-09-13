@@ -36,6 +36,28 @@ class PrefetchError(Exception):
     pass
 
 
+MTIME_FLOOR = 946684800  # 2000-01-01
+
+
+def _header_mtime(url: str) -> int | None:
+    """The server's `Last-Modified`, as an epoch. None if it will not say."""
+    try:
+        with urllib.request.urlopen(_request(url, method="HEAD"), timeout=60) as resp:
+            stamp = resp.headers.get("Last-Modified")
+    except OSError:
+        return None
+    if not stamp:
+        return None
+    try:
+        return int(
+            datetime.datetime.strptime(stamp, "%a, %d %b %Y %H:%M:%S %Z")
+            .replace(tzinfo=datetime.UTC)
+            .timestamp()
+        )
+    except ValueError:
+        return None
+
+
 # Whether `nix flake prefetch` can be used here. None until something has
 # tried. Asked by *doing*, because there is no way to ask: every capability
 # query is itself a `nix <subcommand>`, gated behind the feature being queried.
@@ -229,7 +251,10 @@ def tarball(url: str) -> tuple[str, int | None]:
     """
     fast = _fast_tarball(url)
     if fast is not None:
-        return fast
+        sri, mtime = fast
+        if mtime is None or mtime < MTIME_FLOOR:
+            mtime = _header_mtime(url) or mtime
+        return sri, mtime
 
     try:
         with urllib.request.urlopen(_request(url), timeout=120) as resp:
@@ -241,4 +266,8 @@ def tarball(url: str) -> tuple[str, int | None]:
         local = Path(tmp) / "source.tar.gz"
         local.write_bytes(blob)
         sri = _hash_local(local, url)
-    return sri, _archive_mtime(blob)
+
+    mtime = _archive_mtime(blob)
+    if mtime is None or mtime < MTIME_FLOOR:
+        mtime = _header_mtime(url) or mtime
+    return sri, mtime

@@ -243,3 +243,26 @@ def test_git_omits_flags_that_were_not_declared():
 
     spec = Git().fetch_spec({"type": "git", "url": "u", "rev": "r"})
     assert not (set(FLAGS) & set(spec))
+
+
+def test_a_channel_records_the_rev_its_version_names(monkeypatch):
+    """Without it, nixpkgs' own flake writes `shortRev or "dirty"` into its
+    version string and a channel-pinned nixpkgs is dirty forever. The channel
+    publishes a short rev, and recording what it actually says beats inventing
+    precision it never gave."""
+    monkeypatch.setattr(
+        "pnix.prefetch.resolve_redirect",
+        lambda url: ("https://releases.nixos.org/nixpkgs/"
+                     "nixpkgs-26.11pre1071116.aff8a0b28396/nixexprs.tar.xz"),
+    )
+    locked = sources.get("channel").resolve({"channel": "nixpkgs-unstable"})
+    assert locked["version"] == "nixpkgs-26.11pre1071116.aff8a0b28396"
+    assert locked["rev"] == "aff8a0b28396"
+
+
+def test_a_channel_url_with_no_rev_records_none(monkeypatch):
+    monkeypatch.setattr(
+        "pnix.prefetch.resolve_redirect",
+        lambda url: "https://example.invalid/some-channel/nixexprs.tar.xz",
+    )
+    assert "rev" not in sources.get("channel").resolve({"channel": "x"})

@@ -88,7 +88,11 @@ else if declaredSpec._indirect or false then
   # away -- `nixpkgs.legacyPackages.…` on an empty set -- instead of here, where
   # the remedy is. The transitive path (resolve.nix's `evalNode`) always threw;
   # only the top-level path was silent, and the two disagreeing is the bug.
-  throw "pnix: '${hostName}' needs input '${subName}', which it neither declares nor locks. Add it to `allFollow`, or `follows.${subName}` on the '${hostName}' pin."
+  throw (
+    "pnix: '${hostName}' needs input '${subName}', which it neither declares "
+    + "nor locks. Add it to `allFollow`, or `follows.${subName}` on the "
+    + "'${hostName}' pin."
+  )
 else
   # 4b. A *declared* input that nothing resolved. Empty, as before: a flake
   # naming an input is at least evidence it meant to, and `follows = \"\"` is a
