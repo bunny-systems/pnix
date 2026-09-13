@@ -10,6 +10,8 @@
   overrideVar ? "PNIX_OVERRIDE",
 
   nixpkgsPin ? "nixpkgs",
+
+  system ? builtins.currentSystem or null,
 }:
 let
   fetchers = import ./fetchers.nix { };
@@ -55,10 +57,16 @@ let
   rawSources = builtins.mapAttrs (_: pathOf) fetched;
 
   patchPkgs =
-    if rawSources ? ${nixpkgsPin} then
-      import rawSources.${nixpkgsPin} { }
+    if !(rawSources ? ${nixpkgsPin}) then
+      throw "pnix: a pin declares patches, which need a nixpkgs to apply them, but there is no pin called '${nixpkgsPin}'. Pass `nixpkgsPin` to name it."
+    else if system == null then
+      throw "pnix: a pin declares patches, which have to be built, but this evaluation is pure and so has no `builtins.currentSystem` to build them for. Pass `system`, e.g. `import ./.pnix { system = \"x86_64-linux\"; }`."
     else
-      throw "pnix: a pin declares patches, which need a nixpkgs to apply them, but there is no pin called '${nixpkgsPin}'. Pass `nixpkgsPin` to name it.";
+      import rawSources.${nixpkgsPin} {
+        inherit system;
+        config = { };
+        overlays = [ ];
+      };
 
   applyTo = import ./patch.nix { inherit patchPkgs fetchPatch; };
 

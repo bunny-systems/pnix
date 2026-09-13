@@ -39,6 +39,16 @@ in
   }
 
   {
+    # The probe used to sit inside tryEval, which turned every throw raised
+    # while forcing outPath -- all of them pnix reporting a broken declaration
+    # -- into "not a flake", so the consumer saw a missing attribute in its own
+    # file instead of the reason.
+    name = "a throwing outPath is not silently reported as not-a-flake";
+    expr = throws (fl.isFlake { outPath = throw "no fetcher for kind 'bogus'"; });
+    expected = true;
+  }
+
+  {
     name = "declaredInputs reads every declared name";
     expr = builtins.attrNames (fl.declaredInputs (dir + "/simple"));
     expected = [

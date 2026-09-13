@@ -57,25 +57,27 @@ rec {
   # `flake = false` is the pin saying "fetch this, do not evaluate it" -- a
   # statement about the source, so it belongs here rather than in every caller.
   #
-  # Two separate guards, because they catch different things.
+  # `or null` handles a sourceInfo with no outPath at all. It is the only guard
+  # here, and this used to be wrapped in tryEval as well -- wrongly. Measured,
+  # tryEval catches none of the three things that comment claimed:
   #
-  # `or null` handles a sourceInfo with no outPath at all. tryEval cannot:
-  # measured, it does not catch a missing-attribute error -- the same hole the
-  # design records for `{ }.nope` -- so `sourceInfo.outPath` inside tryEval
-  # aborts the whole evaluation rather than returning success = false.
+  #   pathExists on a path outside the allowed roots, under either --pure-eval
+  #   or --restrict-eval, does not raise at all; it answers false.
+  #   An outPath that `+` cannot extend raises a coercion error, which tryEval
+  #   does not catch -- the same hole as a missing attribute.
+  #   A merely missing flake.nix needs no guard either; pathExists answers false.
   #
-  # tryEval then handles what is left: outPath present but not something `+`
-  # can extend, or a path outside the allowed roots under restricted eval.
-  # A merely missing flake.nix needs neither guard; pathExists returns false.
+  # What it did catch was the one thing that must never be caught: a `throw`
+  # raised while forcing outPath. Every such throw is pnix reporting a broken
+  # declaration -- no fetcher for this kind, no nixpkgs to apply patches with --
+  # and swallowing it turned the pin into "not a flake", so the consumer saw
+  # `attribute 'lib' missing` from its own file instead of the real cause.
   isFlake =
     sourceInfo:
     let
       path = sourceInfo.outPath or null;
-      probe = builtins.tryEval (
-        (sourceInfo.flake or true) && path != null && builtins.pathExists (path + "/flake.nix")
-      );
     in
-    probe.success && probe.value;
+    (sourceInfo.flake or true) && path != null && builtins.pathExists (path + "/flake.nix");
 
   # The data half: every input the flake declares, unresolved.
   declaredInputs =

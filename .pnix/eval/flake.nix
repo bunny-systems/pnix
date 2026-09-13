@@ -34,11 +34,8 @@ rec {
     sourceInfo:
     let
       path = sourceInfo.outPath or null;
-      probe = builtins.tryEval (
-        (sourceInfo.flake or true) && path != null && builtins.pathExists (path + "/flake.nix")
-      );
     in
-    probe.success && probe.value;
+    (sourceInfo.flake or true) && path != null && builtins.pathExists (path + "/flake.nix");
 
   declaredInputs =
     path:

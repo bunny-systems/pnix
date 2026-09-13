@@ -80,4 +80,34 @@ in
     });
     expected = true;
   }
+
+  # Applying a patch is a derivation, so it needs a system, and pure evaluation
+  # has none to offer. `system = null` is what the default collapses to there.
+  {
+    name = "a patched pin with no system to build for is refused";
+    expr = throws (
+      (resolve {
+        lockFile = ./fixtures/locks/patched.lock.json;
+        system = null;
+        overrides = {
+          nixpkgs = flakes + "/notaflake";
+          patched = flakes + "/simple";
+        };
+      }).patched
+    );
+    expected = true;
+  }
+  {
+    name = "and an unpatched pin alongside it still resolves";
+    expr =
+      (resolve {
+        lockFile = ./fixtures/locks/patched.lock.json;
+        system = null;
+        overrides = {
+          nixpkgs = flakes + "/notaflake";
+          patched = flakes + "/simple";
+        };
+      }).nixpkgs.rev;
+    expected = "4444444444444444444444444444444444444444";
+  }
 ]

@@ -1,0 +1,36 @@
+{
+  "schema": 4,
+  "pins": {
+    "nixpkgs": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "NixOS",
+      "repo": "nixpkgs",
+      "rev": "4444444444444444444444444444444444444444",
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/NixOS/nixpkgs/archive/4.tar.gz",
+        "hash": "sha256-DDD"
+      }
+    },
+    "patched": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "o",
+      "repo": "patched",
+      "rev": "5555555555555555555555555555555555555555",
+      "patches": [
+        {
+          "kind": "pr",
+          "url": "https://example.invalid/1.diff",
+          "hash": "sha256-EEE"
+        }
+      ],
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/o/patched/archive/5.tar.gz",
+        "hash": "sha256-FFF"
+      }
+    }
+  }
+}

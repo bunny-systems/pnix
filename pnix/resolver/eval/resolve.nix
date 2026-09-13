@@ -24,6 +24,17 @@
   # Which pin supplies the nixpkgs used to apply patches. Only consulted when
   # some pin actually declares patches.
   nixpkgsPin ? "nixpkgs",
+
+  # Which system builds a patched pin. Only consulted when some pin actually
+  # declares patches -- applying one is a derivation, and a derivation needs a
+  # system.
+  #
+  # `builtins.currentSystem` does not exist under pure evaluation, which is
+  # every `nix build .#...` of a flake, so it cannot simply be read where it is
+  # needed: a pin gains patches and a consumer that always evaluated purely
+  # starts failing sixty frames deep inside nixpkgs' impure.nix. Default to it
+  # where it exists, and ask for it where it does not.
+  system ? builtins.currentSystem or null,
 }:
 let
   fetchers = import ./fetchers.nix { };
@@ -91,11 +102,23 @@ let
 
   # `applyPatches` needs a pkgs. Built from the *unpatched* nixpkgs source, so
   # there is no cycle even if the nixpkgs pin itself carries patches.
+  #
+  # `config` and `overlays` are passed explicitly because nixpkgs' defaults for
+  # them are not empty: impure.nix reads $NIXPKGS_CONFIG or
+  # ~/.config/nixpkgs/config.nix, and impure-overlays.nix reads $NIXPKGS_OVERLAYS
+  # or ~/.config/nixpkgs/overlays. Left alone, whatever happens to be in the
+  # invoking user's home would decide how a pin's patches get applied.
   patchPkgs =
-    if rawSources ? ${nixpkgsPin} then
-      import rawSources.${nixpkgsPin} { }
+    if !(rawSources ? ${nixpkgsPin}) then
+      throw "pnix: a pin declares patches, which need a nixpkgs to apply them, but there is no pin called '${nixpkgsPin}'. Pass `nixpkgsPin` to name it."
+    else if system == null then
+      throw "pnix: a pin declares patches, which have to be built, but this evaluation is pure and so has no `builtins.currentSystem` to build them for. Pass `system`, e.g. `import ./.pnix { system = \"x86_64-linux\"; }`."
     else
-      throw "pnix: a pin declares patches, which need a nixpkgs to apply them, but there is no pin called '${nixpkgsPin}'. Pass `nixpkgsPin` to name it.";
+      import rawSources.${nixpkgsPin} {
+        inherit system;
+        config = { };
+        overlays = [ ];
+      };
 
   applyTo = import ./patch.nix { inherit patchPkgs fetchPatch; };
 
