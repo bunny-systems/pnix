@@ -719,42 +719,43 @@ must keep working.
 ## Prior art
 
 pnix exists because no single tool did all of this, not because the others do it
-badly. In the end it is just another (barely) competing standard.
+badly. In the end, it is just another (barely) competing standard.
 
 **[tack](https://github.com/manic-systems/tack)** — the closest relative, and
 the tool pnix replaced in the configuration it was built for. The global follows
 policy is tack's: `all_follow` with a per-pin opt-out collapses the boilerplate
-flakes make you repeat once per input, and `allFollow`/`excludeFollow` are that
-idea with different spelling. Its `default.nix` is the best reference anywhere
-for walking an upstream `flake.lock` — better than the alternatives, which
-flattens the transitive graph.
+flakes make you repeat once per input, and `allFollow`/`excludeFollow` is that
+idea with different spellings. Its `default.nix` is the best reference anywhere
+for traversing an upstream `flake.lock` — better than the alternatives, which
+flatten the transitive graph.
 
 **[with-inputs](https://github.com/denful/with-inputs)** (Apache-2.0) — a
-hand-rolled flake evaluator in ~200 lines with no `lib` and no experimental
-features, which is the proof that `resolve.nix` was possible at all. Also
+small, hand-rolled flake evaluator with no `lib` dependency and no experimental
+features, which is proof that `resolve.nix` was possible at all. It also
 carries vendored adapters for npins, niv, lon, nixtamal, unflake, tack and
-flakes, which is the clearest map of this whole design space. Read and diffed
+flakes, making it the clearest map of this design space. Read and diffed
 against; nothing imported.
 
-**[npins](https://github.com/andir/npins)** (MIT) — the functionality bar for
-*fetching*. Git, GitHub, GitLab, channels, PyPI, semver releases, `verify`,
-freeze. If you do not need flake evaluation, per-file declarations or patches,
-npins is the mature answer and pnix is overkill.
+**[npins](https://github.com/andir/npins)** (MIT) — the standard for
+*fetching* functionality. It supports Git, GitHub, GitLab, channels, PyPI,
+semver releases, verify, and freeze. If you do not need flake evaluation,
+per-file declarations, or patches, npins is the more mature choice and pnix is
+likely overkill.
 
 **nixtamal** — the only other tool that applies patches (`fetchpatch2` /
-`applyPatches`), and the source of two things still on pnix's list: mirrors with
-failover, and freshness commands. Its patches are a flat manifest with no PR
-tracking, which is the one gap pnix set out to fill.
+`applyPatches`), and the reference for two features still on pnix's roadmap: 
+mirrors with failover, and freshness commands. Its patches are stored in a flat manifest 
+with no PR tracking, which is the one gap pnix set out to fill.
 
 **flake-file** — per-file input declarations, rendered into a generated
 `flake.nix` (or npins, unflake, tack). The same instinct as pnix about *where*
-declarations belong, resolved the other way: generate a manifest rather than not
-need one.
+declarations belong, but taken in the opposite direction: generate a manifest 
+rather than not need one.
 
-**niv, lon, unflake, nixlock** — the single-manifest lock-and-fetch lineage this
-all descends from.
+**niv, lon, unflake, nixlock** — the earlier single-manifest lock-and-fetch
+tools that established the pattern the rest build on.
 
-**Nix itself** — `flake.inputs` is the schema being mirrored, and pnix does not
+**Nix itself** — `flake.inputs` is the schema mirrored, and pnix does not
 try to replace it. The four-step sub-input resolution is an attempt to reproduce
 what flakes already do, minus the experimental feature.
 
