@@ -719,15 +719,15 @@ must keep working.
 ## Prior art
 
 pnix exists because no single tool did all of this, not because the others do it
-badly. In the end its just anther (barley) competing standard.
+badly. In the end it is just another (barely) competing standard.
 
 **[tack](https://github.com/manic-systems/tack)** — the closest relative, and
-the tool pnix replaced in the config it was built for. The global follows policy
-is tack's: `all_follow` with a per-pin opt-out collapses the boilerplate flakes
-make you repeat once per input, and `allFollow`/`excludeFollow` are that idea
-with different spelling. Its `default.nix` is the best reference anywhere for
-walking an upstream `flake.lock` — better than the alternatives, which flatten
-the transitive graph.
+the tool pnix replaced in the configuration it was built for. The global follows
+policy is tack's: `all_follow` with a per-pin opt-out collapses the boilerplate
+flakes make you repeat once per input, and `allFollow`/`excludeFollow` are that
+idea with different spelling. Its `default.nix` is the best reference anywhere
+for walking an upstream `flake.lock` — better than the alternatives, which
+flattens the transitive graph.
 
 **[with-inputs](https://github.com/denful/with-inputs)** (Apache-2.0) — a
 hand-rolled flake evaluator in ~200 lines with no `lib` and no experimental
