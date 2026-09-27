@@ -465,3 +465,51 @@ def test_a_repair_that_filled_the_gap_is_still_reported(fake_project, capsys):
     err = capsys.readouterr().err
     assert "repaired" in err
     assert "could be determined" not in err
+
+
+def test_update_warns_when_the_vendored_resolver_is_older(fake_project, capsys):
+    from pnix import vendor
+
+    vendor.install(fake_project)
+    target = fake_project / ".pnix" / "eval" / "resolve.nix"
+    target.write_text(target.read_text().replace("patchPkgs", "patchPkgsOld"))
+
+    cli.main(["--project", str(fake_project), "update"])
+    err = capsys.readouterr().err
+    assert "eval/resolve.nix" in err and "pnix init" in err
+
+
+def test_update_is_quiet_when_the_vendored_resolver_matches(fake_project, capsys):
+    from pnix import vendor
+
+    vendor.install(fake_project)
+    cli.main(["--project", str(fake_project), "update"])
+    assert "pnix init" not in capsys.readouterr().err
+
+
+def test_update_does_not_nag_a_project_with_nothing_vendored(fake_project, capsys):
+    """`.pnix/` holding only a lock is not an out-of-date resolver."""
+    cli.main(["--project", str(fake_project), "update"])
+    assert "pnix init" not in capsys.readouterr().err
+
+
+def test_update_reports_a_patch_whose_pr_has_merged(fake_project, capsys, monkeypatch):
+    """`look` said so already; `update` is where people actually find out."""
+    monkeypatch.setattr(
+        "pnix.collect.collect",
+        lambda files, attr="pins": (
+            {"foo": {"type": "github", "url": "https://github.com/o/r",
+                     "ref": "main", "patches": [{"pr": 7}]}},
+            {"foo": "/decl.nix"},
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        "pnix.patches.resolve",
+        lambda spec, name, project: [
+            {"kind": "pr", "number": 7, "merged": True, "state": "closed",
+             "url": "https://x/7.diff", "hash": "sha256-AAA"}
+        ],
+    )
+    cli.main(["--project", str(fake_project), "update"])
+    assert "PR #7 is merged upstream" in capsys.readouterr().err

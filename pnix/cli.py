@@ -360,12 +360,44 @@ def _resolve_all(project: Path, names: list[str], write: bool,
     return result, existing
 
 
+def _warn_if_stale(project: Path) -> None:
+    """Tell a consumer their vendored resolver predates this pnix.
+
+    Only when something is vendored: an empty `.pnix/` is a project nobody has
+    run `init` in, and Nix says so loudly the moment anything imports it.
+    """
+    if not any((project / vendor.DEST).rglob(f"*{vendor.MARKABLE}")):
+        return
+    drift = vendor.stale(project)
+    if not drift:
+        return
+    shown = ", ".join(str(p.relative_to(project)) for p in drift[:4])
+    more = f", +{len(drift) - 4} more" if len(drift) > 4 else ""
+    print(
+        f"pnix: {vendor.DEST}/ is not what this pnix writes "
+        f"({len(drift)} file{'' if len(drift) == 1 else 's'}: {shown}{more}). "
+        f"Re-run `pnix init`: the lock and the code that reads it ship together, "
+        f"so a fix to the resolver only reaches this project when you vendor it.",
+        file=sys.stderr,
+    )
+
+
 def cmd_update(args) -> int:
-    resolved, _ = _resolve_all(find_project(args.project), args.names, write=True,
+    project = find_project(args.project)
+    _warn_if_stale(project)
+    resolved, _ = _resolve_all(project, args.names, write=True,
                                roots=args.root, quiet=args.quiet,
                                verbose=args.verbose, exclude=args.exclude)
     for name in sorted(resolved):
-        for line in patches_mod.applies_to(resolved[name]):
+        # `advice` reads the entry `update` just wrote and costs no request, so
+        # there is no reason to make it exclusive to `look`: a patch tracking a
+        # merged PR is carrying a diff upstream already has, and the run that
+        # locks it is the moment you want to hear that. `drift` stays out --
+        # it compares the locked head against the current one, which `update`
+        # has just made identical.
+        for line in patches_mod.advice(resolved[name]) + patches_mod.applies_to(
+            resolved[name]
+        ):
             print(f"pnix: {name}: {line}", file=sys.stderr)
         if resolved[name].get("type") == "path":
             # A path pin carries no hash and names a directory on this machine
@@ -389,6 +421,7 @@ def cmd_init(args) -> int:
 
 def cmd_look(args) -> int:
     project = find_project(args.project)
+    _warn_if_stale(project)
     fresh, existing = _resolve_all(project, [], write=False, roots=args.root,
                                    prefetch=False)
     moved = False

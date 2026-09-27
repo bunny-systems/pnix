@@ -14,7 +14,6 @@ is whole-line only and provably semantics-preserving -- see
 `test_stripping_preserves_the_parse_tree`.
 """
 
-import shutil
 from pathlib import Path
 
 MARKER = "# pnix-managed. delete this line to take ownership; pnix will leave it alone."
@@ -71,6 +70,22 @@ def _marked(text: str) -> str:
     return text if text.startswith(HEADER) else f"{HEADER}\n{text}"
 
 
+def _vendorable() -> list[Path]:
+    """Every source file `install` would copy, in a stable order."""
+    return [
+        p
+        for p in sorted(SOURCE.rglob("*"))
+        if not p.is_dir() and p.suffix in (MARKABLE, *VERBATIM)
+    ]
+
+
+def _rendered(src: Path) -> bytes:
+    """Exactly what `install` writes for this source file."""
+    if src.suffix in VERBATIM:
+        return src.read_bytes()
+    return _marked(_stripped(src.read_text())).encode()
+
+
 def install(project: Path, force: bool = False) -> list[Path]:
     """Write the vendored resolver under <project>/.pnix, return the paths.
 
@@ -80,11 +95,8 @@ def install(project: Path, force: bool = False) -> list[Path]:
     root = Path(project) / DEST
     written: list[Path] = []
 
-    for src in sorted(SOURCE.rglob("*")):
-        if src.is_dir() or src.suffix not in (MARKABLE, *VERBATIM):
-            continue
-        rel = src.relative_to(SOURCE)
-        dst = root / rel
+    for src in _vendorable():
+        dst = root / src.relative_to(SOURCE)
 
         if dst.exists() and not force and MARKER not in dst.read_text():
             raise VendorError(
@@ -93,12 +105,42 @@ def install(project: Path, force: bool = False) -> list[Path]:
             )
 
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.suffix in VERBATIM:
-            shutil.copyfile(src, dst)
-        else:
-            dst.write_text(_marked(_stripped(src.read_text())))
+        dst.write_bytes(_rendered(src))
         written.append(dst)
 
     if not written:
         raise VendorError(f"no resolver files found under {SOURCE}")
     return written
+
+
+def stale(project: Path) -> list[Path]:
+    """Vendored files that differ from what this pnix would write.
+
+    The lock has `schema` to catch a lock the resolver cannot read. Nothing
+    caught the other direction: `.pnix/` changes only when someone runs `pnix
+    init`, so a resolver fix sits in the released tool while every consumer
+    keeps evaluating the copy they vendored months ago, with no sign that a
+    newer one exists.
+
+    Compares content rather than a version stamp. A stamp would have to be
+    bumped by hand and would report a difference on every release whether the
+    resolver changed or not; the files themselves are the truth, and comparing
+    them costs a few reads.
+
+    A file whose MARKER is gone has been adopted deliberately -- `install`
+    already refuses to overwrite it, so it is not reported here either.
+    """
+    root = Path(project) / DEST
+    out: list[Path] = []
+
+    for src in _vendorable():
+        dst = root / src.relative_to(SOURCE)
+        if not dst.exists():
+            out.append(dst)
+            continue
+        current = dst.read_bytes()
+        if src.suffix == MARKABLE and MARKER.encode() not in current:
+            continue
+        if current != _rendered(src):
+            out.append(dst)
+    return out

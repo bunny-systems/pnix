@@ -179,3 +179,37 @@ def test_the_vendored_copy_is_already_formatted(tmp_path):
                            capture_output=True).returncode != 0
     ]
     assert not unformatted, f"vendored but not nixfmt-clean: {unformatted}"
+
+
+def test_a_fresh_install_is_not_stale(tmp_path):
+    vendor.install(tmp_path)
+    assert vendor.stale(tmp_path) == []
+
+
+def test_an_older_vendored_file_is_reported_stale(tmp_path):
+    """The whole point: a consumer's .pnix only changes when they run `init`,
+    and nothing else tells them a resolver fix exists."""
+    vendor.install(tmp_path)
+    target = tmp_path / ".pnix" / "eval" / "resolve.nix"
+    target.write_text(target.read_text().replace("patchPkgs", "patchPkgsOld"))
+    assert vendor.stale(tmp_path) == [target]
+
+
+def test_a_missing_vendored_file_is_stale(tmp_path):
+    vendor.install(tmp_path)
+    target = tmp_path / ".pnix" / "eval" / "date.nix"
+    target.unlink()
+    assert vendor.stale(tmp_path) == [target]
+
+
+def test_an_adopted_file_is_not_stale(tmp_path):
+    """Dropping the marker is how a user says "mine now". `install` already
+    refuses to clobber one; staleness must not nag about it either."""
+    vendor.install(tmp_path)
+    target = tmp_path / ".pnix" / "eval" / "resolve.nix"
+    target.write_text("# mine now\n")
+    assert vendor.stale(tmp_path) == []
+
+
+def test_stale_reports_an_unvendored_project(tmp_path):
+    assert len(vendor.stale(tmp_path)) == len(vendor.install(tmp_path))

@@ -93,6 +93,12 @@ pnix update [name…]          resolve refs → revs, hash, write the lock
 pnix look                    report drift; writes nothing, downloads nothing
 ```
 
+`init` is not just a bootstrap: it is how a resolver fix reaches your repo. The
+vendored copy under `.pnix/` changes when you run it and at no other time, so
+`update` and `look` compare what is there against what this pnix writes and say
+so when they differ. A file whose marker you deleted is yours and is never
+reported.
+
 | flag | on | meaning |
 |---|---|---|
 | `--project DIR` | all | project root; default: nearest parent with a `.pnix/` (`init`: the working directory) |
@@ -586,19 +592,50 @@ By default a patched pin is a **source only** — `applyPatches` produces a
 derivation and nothing reads inside it, so there is no import-from-derivation.
 Use it as `src = inputs.finit;`, then `overrideAttrs` or an overlay.
 
-If you need its *modules*, you must realise it first:
+`importable = true` is about which half of the pin you read:
+
+| you read | example | needs `importable` |
+| --- | --- | --- |
+| the tree | `src = inputs.finit;`, `import inputs.nixpkgs { … }`, `"${inputs.x}/lib"` | no |
+| the flake outputs pnix computed | `inputs.nixpkgs.lib`, `.legacyPackages`, `.nixosModules` | **yes** |
+
+The second row is the expensive one because producing those outputs means
+probing `flake.nix` *inside an unbuilt derivation*, which realises it. Without
+`importable` the pin is its sourceInfo and nothing else — `outPath` plus
+whichever of `rev`, `shortRev`, `lastModified`, `lastModifiedDate`, `narHash`
+and `version` the lock has — so reading anything else is an `attribute …
+missing` error in your own file, and a `trace` says so.
 
 ```nix
 pins.thing = { url = "https://github.com/o/r"; patches = [ … ]; importable = true; };
 ```
 
-That costs an IFD: it stalls the rebuild while it builds and fails outright
-under `--option allow-import-from-derivation false`. Patching an input to change
-a module is usually the wrong tool when `mkForce`, overlays and `disabledModules`
-exist.
+It costs an IFD: it stalls the rebuild while it builds and fails outright under
+`--option allow-import-from-derivation false`. **But read the table before
+blaming `importable` for that cost** — if anything in your config already does
+`import <the patched pin>`, the derivation is realised either way and
+`importable` adds only the `callFlake` on top. Patching an input to change a
+*module* is usually the wrong tool when `mkForce`, overlays and
+`disabledModules` exist.
 
 Patches need a nixpkgs to apply them; pnix uses the pin named `nixpkgs`. Rename
 with `import ./.pnix { nixpkgsPin = "nixpkgs-stable"; }`.
+
+### A patched pin needs a `system`
+
+Applying a patch is a derivation, and a derivation needs a system. Under
+`nix-build`, `nix-instantiate` or `nixos-rebuild --file` pnix reads
+`builtins.currentSystem`. **Pure evaluation — every `nix build .#…` of a flake
+— has no such builtin**, so name it:
+
+```nix
+sources = import ./.pnix { system = "x86_64-linux"; };
+```
+
+A literal, not `builtins.currentSystem or "x86_64-linux"`. If a repo has both a
+`default.nix` and a `flake.nix` they must name the *same* system, or the two
+entry points disagree on the patched store path and on every derivation below
+it. Nothing else in pnix consults `system`, and an unpatched pin never needs it.
 
 ---
 
