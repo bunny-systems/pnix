@@ -268,15 +268,26 @@ def test_a_real_archive_date_is_left_alone(monkeypatch):
     assert prefetch.tarball("https://example.invalid/x.tar.gz")[1] == 1788914643
 
 
-def test_the_fast_path_gets_the_same_treatment(monkeypatch):
+def test_the_fast_path_gets_the_same_treatment(tmp_path, monkeypatch):
     """Nix reports the sentinel too, so fixing only the stable path would make
-    the two disagree -- the one property the fast path must never break."""
+    the two disagree -- the one property the fast path must never break.
+
+    Both paths now rank the archive above the header, so a sub-floor date from
+    either one falls through to the archive first. Here the archive is sub-floor
+    as well, which is the only case that reaches the header -- and both paths
+    reach it identically, which is what this guards.
+    """
+    tgz = _archive_with_mtime(tmp_path, 315532800)      # 1980, below the floor
+    monkeypatch.setattr(prefetch, "_header_mtime", lambda url: 1789100180)
+
     monkeypatch.setattr(prefetch, "_fast_tarball",
                         lambda url: ("sha256-X", 315532800))
-    monkeypatch.setattr(prefetch, "_header_mtime", lambda url: 1789100180)
-    assert prefetch.tarball("https://example.invalid/x.tar.xz") == (
-        "sha256-X", 1789100180,
-    )
+    fast = prefetch.tarball(f"file://{tgz}")
+
+    monkeypatch.setattr(prefetch, "_fast_tarball", lambda url: None)
+    stable = prefetch.tarball(f"file://{tgz}")
+
+    assert fast[1] == stable[1] == 1789100180
 
 
 def test_a_fast_path_that_reports_no_date_falls_through(monkeypatch):
@@ -318,3 +329,75 @@ def test_a_fast_path_with_a_date_still_short_circuits(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(
                             AssertionError("downloaded anyway")))
     assert prefetch.tarball("https://example.invalid/x.tar.gz") == ("sha256-X", 1788914643)
+
+
+# `Last-Modified` is the only lastModified candidate not derived from the bytes
+# every machine downloads, and forge software disagrees about what it means.
+# Measured on codeberg (forgejo), archive endpoint, 2026-09-30:
+#
+#   Last-Modified: Wed, 30 Sep 2026 10:12:58 GMT   <- when it built the tarball
+#   actual commit date: 2026-09-26T00:03:33Z       <- four days earlier
+#
+# So it must be the *last* resort. Preferring it over the archive makes the
+# locked value depend on whether the running Nix reports `lastModified` for a
+# `tarball+` ref: one machine records the commit date, another records the
+# moment it happened to ask -- and re-records a new one on every update.
+
+COMMIT_DATE = 1788914643
+GENERATED_AT = 1790500000          # "now", as forgejo would report it
+
+
+def _archive_with_mtime(tmp_path, mtime: int):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "f").write_text("x\n")
+    tgz = tmp_path / "s.tar.gz"
+    with tarfile.open(tgz, "w:gz") as tf:
+        info = tf.gettarinfo(src, arcname="src")
+        info.mtime = mtime
+        tf.addfile(info)
+    return tgz
+
+
+def test_the_archive_outranks_a_header_when_the_fast_path_has_no_date(
+        tmp_path, monkeypatch):
+    tgz = _archive_with_mtime(tmp_path, COMMIT_DATE)
+    monkeypatch.setattr(prefetch, "_fast_tarball", lambda url: ("sha256-X", None))
+    monkeypatch.setattr(prefetch, "_header_mtime", lambda url: GENERATED_AT)
+    _, mtime = prefetch.tarball(f"file://{tgz}")
+    assert mtime == COMMIT_DATE
+
+
+def test_the_archive_outranks_a_header_when_the_fast_path_is_prehistoric(
+        tmp_path, monkeypatch):
+    """A channel tarball stamps 1980; that is below the floor, so the archive
+    still has to be consulted before the header."""
+    tgz = _archive_with_mtime(tmp_path, COMMIT_DATE)
+    monkeypatch.setattr(prefetch, "_fast_tarball",
+                        lambda url: ("sha256-X", 315532800))   # 1980-01-01
+    monkeypatch.setattr(prefetch, "_header_mtime", lambda url: GENERATED_AT)
+    _, mtime = prefetch.tarball(f"file://{tgz}")
+    assert mtime == COMMIT_DATE
+
+
+def test_the_header_is_used_when_the_archive_has_no_usable_mtime(
+        tmp_path, monkeypatch):
+    """The 19700101 case: every entry at the epoch. Then the header is all
+    there is, and a wrong date beats a guaranteed-wrong one."""
+    tgz = _archive_with_mtime(tmp_path, 0)
+    monkeypatch.setattr(prefetch, "_fast_tarball", lambda url: ("sha256-X", None))
+    monkeypatch.setattr(prefetch, "_header_mtime", lambda url: GENERATED_AT)
+    _, mtime = prefetch.tarball(f"file://{tgz}")
+    assert mtime == GENERATED_AT
+
+
+def test_a_usable_fast_path_date_is_taken_as_is(tmp_path, monkeypatch):
+    """No download, no header: the fast path already agrees with the archive."""
+    tgz = _archive_with_mtime(tmp_path, COMMIT_DATE)
+    monkeypatch.setattr(prefetch, "_fast_tarball",
+                        lambda url: ("sha256-FAST", COMMIT_DATE))
+    def no_header(url):
+        raise AssertionError("the header must not be consulted")
+    monkeypatch.setattr(prefetch, "_header_mtime", no_header)
+    sri, mtime = prefetch.tarball(f"file://{tgz}")
+    assert (sri, mtime) == ("sha256-FAST", COMMIT_DATE)

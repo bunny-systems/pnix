@@ -249,21 +249,40 @@ def tarball(url: str) -> tuple[str, int | None]:
     twice. Hashing a local copy yields the same NAR hash as hashing the remote
     URL, since the hash is of the unpacked tree.
     """
+    # Candidate order is the same on both paths, and it is a correctness
+    # property rather than a preference: `nix flake prefetch`, then the archive,
+    # then -- last -- the `Last-Modified` header.
+    #
+    # The first two are derived from the same bytes every machine downloads, so
+    # they agree. Measured on one pin, three ways:
+    #
+    #   nix flake prefetch         1790509006
+    #   archive max mtime          1790509006   (git archive stamps every entry
+    #   API commit.committer.date  1790509006    with the commit's committer date)
+    #
+    # The header is not derived from those bytes, and forge software disagrees
+    # about what it means. Codeberg (forgejo), archive endpoint, 2026-09-30:
+    #
+    #   Last-Modified: Wed, 30 Sep 2026 10:12:58 GMT   <- when it built the tarball
+    #   actual commit date: 2026-09-26T00:03:33Z       <- four days earlier
+    #
+    # Preferring it over the archive therefore makes the locked value depend on
+    # whether the running Nix reports `lastModified` for a `tarball+` ref: one
+    # machine records the commit date, another records the moment it asked, and
+    # re-records a different one on every update. Same rev, different
+    # `lastModified`, and since that feeds nixpkgs' version string, a different
+    # store path for everything downstream.
     fast = _fast_tarball(url)
     if fast is not None:
         sri, mtime = fast
-        if mtime is None or mtime < MTIME_FLOOR:
-            mtime = _header_mtime(url) or mtime
-        if mtime is not None:
+        if mtime is not None and mtime >= MTIME_FLOOR:
             return sri, mtime
-        # `nix flake prefetch` answered but told us no date, and the server has
-        # none either -- GitHub's codeload endpoint sends an ETag and no
-        # `Last-Modified`. Whether Nix reports one for a `tarball+` ref differs
-        # by implementation and version, so the shortcut cannot be trusted for
-        # it: reported from the wild as a lock where all 27 pins had a hash and
-        # no `lastModified`, building as `...26.11.19700101.<rev>` forever.
-        # Fall through and read the archive, which is where the commit date
-        # actually lives. Costs the download the fast path was avoiding.
+        # `nix flake prefetch` answered but told us no usable date. Whether it
+        # reports one for a `tarball+` ref differs by implementation and version:
+        # reported from the wild as a lock where all 27 pins had a hash and no
+        # `lastModified`, building as `...26.11.19700101.<rev>` forever. Fall
+        # through and read the archive, which is where the commit date actually
+        # lives. Costs the download the fast path was avoiding.
 
     try:
         with urllib.request.urlopen(_request(url), timeout=120) as resp:
