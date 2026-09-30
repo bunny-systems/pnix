@@ -16,6 +16,7 @@ from pnix import __version__, discover, refcache, refs, schema, sources, vendor
 from pnix import collect as collect_mod
 from pnix import lock as lock_mod
 from pnix import patches as patches_mod
+from pnix import spinner as spinner_mod
 
 # The lock lives beside the vendored resolver: one directory is the whole
 # of pnix in a consumer repo, so `rm -rf .pnix` uninstalls it.
@@ -136,7 +137,8 @@ class Progress:
     is for.
     """
 
-    def __init__(self, total: int, quiet: bool = False, verbose: bool = False):
+    def __init__(self, total: int, quiet: bool = False, verbose: bool = False,
+                 animate: bool = True):
         self.total = total
         self.quiet = quiet or total == 0
         self.verbose = verbose and not self.quiet
@@ -145,9 +147,44 @@ class Progress:
         self.width = 0
         self.started = time.monotonic()
         self._lock = threading.Lock()
+        self._inflight: set[str] = set()
+        # Inert off a tty, so nothing below has to ask whether to animate.
+        #
+        # Deliberately not tied to `quiet`. `look` passes quiet=True because it
+        # prints its own report rather than per-pin lines, and it is the command
+        # most in need of a spinner: a cold run is ~35 s of nothing. `-q` is the
+        # only thing that silences the animation, because that is a request for
+        # silence rather than for a different report.
+        self.spinner = spinner_mod.Spinner(sys.stderr, total=total)
+        if not animate or total == 0:
+            self.spinner.enabled = False
         if not self.quiet:
-            print(f"pnix: resolving {total} pin{'s' * (total != 1)}",
-                  file=sys.stderr)
+            self._say(f"pnix: resolving {total} pin{'s' * (total != 1)}")
+
+    def _say(self, text: str) -> None:
+        """Every line goes through the spinner, which owns the last row.
+
+        Off a tty this is a plain write; on one it clears the animation, prints,
+        and leaves the next tick to redraw underneath.
+        """
+        self.spinner.write_line(text)
+
+    def __enter__(self):
+        self.spinner.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.spinner.stop()
+        return False
+
+    def tick(self) -> None:
+        with self._lock:
+            self.spinner.update(self._inflight, done=self.done)
+        self.spinner.tick()
+
+    def began(self, name: str) -> None:
+        with self._lock:
+            self._inflight.add(name)
 
     def fetching(self, name: str) -> None:
         """Announced *before* the download, because that is where the time is.
@@ -158,8 +195,7 @@ class Progress:
         run of one or two slow pins, where nothing else moves for 15 s.
         """
         if self.verbose:
-            with self._lock:
-                print(f"  fetching {name}...", file=sys.stderr)
+            self._say(f"  fetching {name}...")
 
     #: A pin has no upstream to be "ahead" or "diverged" *of* -- the lock holds
     #: one rev, and saying more would mean a commit-graph walk per pin.
@@ -190,21 +226,21 @@ class Progress:
         with self._lock:
             self.done += 1
             self.counts[state] += 1
-            if not self.quiet:
-                n = len(str(self.total))
-                print(f"  [{self.done:>{n}}/{self.total}] "
-                      f"{name:<{self.width}}  {state:<9} {detail}",
-                      file=sys.stderr)
+            self._inflight.discard(name)
+            line = (f"  [{self.done:>{len(str(self.total))}}/{self.total}] "
+                    f"{name:<{self.width}}  {state:<9} {detail}")
+        if not self.quiet:
+            self._say(line)
 
     def summary(self) -> None:
+        self.spinner.stop()
         if self.quiet:
             return
         secs = time.monotonic() - self.started
         parts = [f"{self.counts[s]} {s}" for s in self.STATES if self.counts[s]]
-        print(
+        self._say(
             f"pnix: {self.done} pin{'s' * (self.done != 1)} resolved"
-            f"{' -- ' + ', '.join(parts) if parts else ''}, {secs:.1f}s",
-            file=sys.stderr,
+            f"{' -- ' + ', '.join(parts) if parts else ''}, {secs:.1f}s"
         )
 
 
@@ -215,7 +251,8 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                  verbose: bool = False,
                  exclude: list[str] | None = None,
                  workers: int | None = None,
-                 cache: refcache.Cache | None = None) -> tuple[dict, dict]:
+                 cache: refcache.Cache | None = None,
+                 animate: bool = True) -> tuple[dict, dict]:
     """Resolve every declared pin. Returns (resolved, previous lock contents).
 
     `prefetch=False` is what makes `pnix look` cheap: resolving a ref is one
@@ -284,11 +321,13 @@ def _resolve_all(project: Path, names: list[str], write: bool,
     # Each pin is an independent network round-trip: ~0.86 s for the ls-remote
     # alone, so 21 pins serially is ~18 s. Pool the whole per-pin pipeline
     # (resolve, then prefetch when the rev actually moved).
-    progress = Progress(len(todo), quiet=quiet, verbose=verbose)
+    progress = Progress(len(todo), quiet=quiet, verbose=verbose,
+                        animate=animate)
     # Names are known up front, so the result column can line up.
     progress.width = max((len(n) for n in todo), default=0)
 
     def one(name: str) -> tuple[str, dict]:
+        progress.began(name)
         spec = todo[name]
         # `type` is optional when the URL's host says what runs there;
         # schema.validate has already refused anything it could not settle.
@@ -355,16 +394,29 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         # after it: eight threads share the object, so reading before they start
         # and writing after they finish avoids locking the file per access.
         refs.CACHE = cache
+        stop_ticking = threading.Event()
+
+        def animate() -> None:
+            # A daemon would do, but an explicit stop means the last frame is
+            # always erased -- a killed thread can leave the line drawn.
+            while not stop_ticking.wait(0.1):
+                progress.tick()
+
+        ticker = threading.Thread(target=animate, daemon=True)
         try:
-            # One pin is one network round-trip, so the pool is sized by how many
-            # requests are worth having in flight, not by cores. Capped at the
-            # number of pins because an idle thread still costs a thread.
-            with ThreadPoolExecutor(
-                max_workers=min(workers or refs.DEFAULT_WORKERS, len(todo))
-            ) as pool:
-                for name, locked in pool.map(one, list(todo)):
-                    result[name] = locked
+            with progress:
+                ticker.start()
+                # One pin is one network round-trip, so the pool is sized by how
+                # many requests are worth having in flight, not by cores. Capped
+                # at the number of pins because an idle thread still costs one.
+                with ThreadPoolExecutor(
+                    max_workers=min(workers or refs.DEFAULT_WORKERS, len(todo))
+                ) as pool:
+                    for name, locked in pool.map(one, list(todo)):
+                        result[name] = locked
         finally:
+            stop_ticking.set()
+            ticker.join(timeout=1)
             refs.CACHE = None
             if cache is not None:
                 cache.save()
@@ -417,7 +469,8 @@ def cmd_update(args) -> int:
                                roots=args.root, quiet=args.quiet,
                                verbose=args.verbose, exclude=args.exclude,
                                workers=args.workers,
-                               cache=_cache_for(args, args.names))
+                               cache=_cache_for(args, args.names),
+                               animate=not args.quiet)
     for name in sorted(resolved):
         # `advice` reads the entry `update` just wrote and costs no request, so
         # there is no reason to make it exclusive to `look`: a patch tracking a
@@ -444,8 +497,17 @@ def cmd_update(args) -> int:
 def cmd_init(args) -> int:
     # `init` is the one command that must work where no `.pnix/` exists yet, so
     # it takes the working directory rather than searching for one.
-    for path in vendor.install(Path(args.project or "."), force=args.force):
-        print(f"wrote {path}")
+    project = Path(args.project or ".")
+    # Asked before writing, because afterwards nothing differs. `init` is now
+    # routine -- it is how a resolver fix reaches a repo -- so nine identical
+    # `wrote` lines every time says nothing about what actually moved.
+    changing = set(vendor.stale(project))
+    written = vendor.install(project, force=args.force)
+    for path in written:
+        if path in changing:
+            print(f"wrote {path}")
+    if not changing:
+        print(f"{vendor.DEST}/ is up to date ({len(written)} files)")
     return 0
 
 
@@ -457,18 +519,25 @@ def cmd_look(args) -> int:
                                    prefetch=False, workers=args.workers,
                                    cache=cache)
     moved = False
+    # Same width-aligned column `update` prints, so the two commands read as one
+    # tool. Widest of everything that might be named, since the three loops below
+    # draw from different sets.
+    width = max((len(n) for n in set(fresh) | set(existing)), default=0)
+
+    def row(name: str, detail: str) -> None:
+        nonlocal moved
+        moved = True
+        print(f"{name:<{width}}  {detail}")
+
     for name in sorted(fresh):
-        old = existing.get(name, {}).get("rev")
-        new = fresh[name].get("rev")
-        if old and new and old != new:
-            moved = True
-            print(f"{name}: {old[:8]} -> {new[:8]}")
+        was = existing.get(name, {}).get("rev")
+        now = fresh[name].get("rev")
+        if was and now and was != now:
+            row(name, f"{was[:8]} -> {now[:8]}")
     for name in sorted(set(fresh) - set(existing)):
-        moved = True
-        print(f"{name}: not locked yet")
+        row(name, "not locked yet")
     for name in sorted(set(existing) - set(fresh)):
-        moved = True
-        print(f"{name}: locked but no longer declared")
+        row(name, "locked but no longer declared")
 
     # Patches. `advice` reads the lock alone; `drift` costs one request per
     # tracked PR, which is cheap because `head` and `base` were stored at lock
@@ -477,8 +546,7 @@ def cmd_look(args) -> int:
         node = existing[name]
         for line in (patches_mod.advice(node) + patches_mod.drift(node)
                      + patches_mod.applies_to(node)):
-            moved = True
-            print(f"{name}: {line}")
+            row(name, line)
     if not moved:
         print("all pins current")
 
@@ -491,7 +559,9 @@ def cmd_look(args) -> int:
               f"up to {int(oldest // 60)}m{int(oldest % 60)}s old "
               f"-- pass --refresh to re-check",
               file=sys.stderr)
-    return 0
+    # Drift is not an error -- `look` is a report, and a report that fails is
+    # useless in a pipeline. `--exit-code` is for the caller that wants a gate.
+    return 1 if (moved and args.exit_code) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -540,6 +610,8 @@ def main(argv: list[str] | None = None) -> int:
     lk.add_argument("--workers", type=int, default=None, metavar="N",
                     help=workers_help)
     lk.add_argument("--refresh", action="store_true", help=refresh_help)
+    lk.add_argument("--exit-code", action="store_true",
+                    help="exit 1 when anything has drifted, for CI")
     lk.set_defaults(func=cmd_look)
 
     args = parser.parse_args(argv)

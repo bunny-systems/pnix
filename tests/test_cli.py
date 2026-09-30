@@ -614,3 +614,63 @@ def test_update_does_not_announce_the_cache(cached_project, capsys):
     cli.main(["--project", str(project), "update"])
     out = capsys.readouterr()
     assert "--refresh" not in (out.out + out.err)
+
+
+# --- sitting 2: exit code, init output ------------------------------------
+
+def test_look_still_exits_zero_on_drift_by_default(fake_project, monkeypatch):
+    cli.main(["--project", str(fake_project), "update"])
+    monkeypatch.setattr("pnix.refs.resolve", lambda url, ref=None: "2" * 40)
+    assert cli.main(["--project", str(fake_project), "look", "--refresh"]) == 0
+
+
+def test_exit_code_makes_drift_a_failure(fake_project, monkeypatch):
+    """So CI can gate on it, which is the main reason to run `look` at all."""
+    cli.main(["--project", str(fake_project), "update"])
+    monkeypatch.setattr("pnix.refs.resolve", lambda url, ref=None: "2" * 40)
+    assert cli.main(
+        ["--project", str(fake_project), "look", "--exit-code", "--refresh"]) == 1
+
+
+def test_exit_code_is_zero_when_nothing_moved(fake_project):
+    cli.main(["--project", str(fake_project), "update"])
+    assert cli.main(["--project", str(fake_project), "look", "--exit-code"]) == 0
+
+
+def test_init_reports_only_what_it_changed(tmp_path, capsys):
+    cli.main(["--project", str(tmp_path), "init"])
+    capsys.readouterr()
+    target = tmp_path / ".pnix" / "eval" / "resolve.nix"
+    target.write_text(target.read_text().replace("patchPkgs", "patchPkgsOld"))
+    cli.main(["--project", str(tmp_path), "init"])
+    out = capsys.readouterr().out
+    assert "eval/resolve.nix" in out
+    assert "eval/date.nix" not in out
+
+
+def test_init_says_nothing_changed_rather_than_listing_everything(tmp_path, capsys):
+    cli.main(["--project", str(tmp_path), "init"])
+    capsys.readouterr()
+    assert cli.main(["--project", str(tmp_path), "init"]) == 0
+    out = capsys.readouterr().out
+    assert "up to date" in out.lower()
+    assert "wrote" not in out
+
+
+def test_look_aligns_its_name_column(fake_project, monkeypatch, capsys):
+    """`update` has had a width-aligned column since it was written; `look`
+    printed a ragged `name: ...` next to it."""
+    monkeypatch.setattr(
+        "pnix.collect.collect",
+        lambda files, attr="pins": (
+            {"a": {"type": "github", "url": "https://github.com/o/a", "ref": "main"},
+             "a-much-longer-name": {"type": "github",
+                                    "url": "https://github.com/o/b", "ref": "main"}},
+            {"a": "/decl.nix", "a-much-longer-name": "/decl.nix"},
+            [],
+        ),
+    )
+    cli.main(["--project", str(fake_project), "look"])
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if "not locked" in ln]
+    assert len(lines) == 2
+    assert len({ln.index("not locked") for ln in lines}) == 1, lines
