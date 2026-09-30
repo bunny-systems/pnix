@@ -771,6 +771,28 @@ needs no network at all.
 
 ---
 
+## The ref cache
+
+Ref lookups are cached in `$XDG_CACHE_HOME/pnix/refs.json` for an hour, matching
+Nix's `tarball-ttl`. It matters because one big repository dominates a run: on a
+20-pin config a cold `look` took 35 s and a cached one 0.2 s.
+
+The key is the whole `ls-remote` call, so `nixos-unstable` and `master` on the
+same repo are separate entries, and a pin with an explicit `rev` is never
+resolved at all. Failed and empty lookups are not stored.
+
+`--refresh` ignores the cache; so does naming a pin, since `pnix update nixpkgs`
+is how you say you want that one now. `update` uses it silently — a cached rev is
+a real rev, just not the newest, and you see it in the lock diff. `look` says so,
+because reporting *all pins current* for a pin that moved is what it exists to
+catch:
+
+```
+pnix: 20 refs answered from cache, up to 7m36s old -- pass --refresh to re-check
+```
+
+---
+
 ## Development
 
 ```sh
