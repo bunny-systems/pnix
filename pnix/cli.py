@@ -213,7 +213,8 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                  prefetch: bool = True,
                  quiet: bool = True,
                  verbose: bool = False,
-                 exclude: list[str] | None = None) -> tuple[dict, dict]:
+                 exclude: list[str] | None = None,
+                 workers: int | None = None) -> tuple[dict, dict]:
     """Resolve every declared pin. Returns (resolved, previous lock contents).
 
     `prefetch=False` is what makes `pnix look` cheap: resolving a ref is one
@@ -349,8 +350,12 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         return name, locked
 
     if todo:
-        workers = min(refs.DEFAULT_WORKERS, len(todo))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        # One pin is one network round-trip, so the pool is sized by how many
+        # requests are worth having in flight, not by cores. Capped at the
+        # number of pins because an idle thread still costs a thread.
+        with ThreadPoolExecutor(
+            max_workers=min(workers or refs.DEFAULT_WORKERS, len(todo))
+        ) as pool:
             for name, locked in pool.map(one, list(todo)):
                 result[name] = locked
     progress.summary()
@@ -387,7 +392,8 @@ def cmd_update(args) -> int:
     _warn_if_stale(project)
     resolved, _ = _resolve_all(project, args.names, write=True,
                                roots=args.root, quiet=args.quiet,
-                               verbose=args.verbose, exclude=args.exclude)
+                               verbose=args.verbose, exclude=args.exclude,
+                               workers=args.workers)
     for name in sorted(resolved):
         # `advice` reads the entry `update` just wrote and costs no request, so
         # there is no reason to make it exclusive to `look`: a patch tracking a
@@ -423,7 +429,7 @@ def cmd_look(args) -> int:
     project = find_project(args.project)
     _warn_if_stale(project)
     fresh, existing = _resolve_all(project, [], write=False, roots=args.root,
-                                   prefetch=False)
+                                   prefetch=False, workers=args.workers)
     moved = False
     for name in sorted(fresh):
         old = existing.get(name, {}).get("rev")
@@ -467,6 +473,8 @@ def main(argv: list[str] | None = None) -> int:
 
     root_help = ("directory to scan for declarations; repeatable, "
                  "defaults to the project root")
+    workers_help = (f"how many pins to resolve at once "
+                    f"(default {refs.DEFAULT_WORKERS})")
 
     up = sub.add_parser("update", help="resolve and write the lock")
     up.add_argument("names", nargs="*", help="pins to update; default all")
@@ -478,6 +486,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="also report each download as it starts")
     up.add_argument("--exclude", action="append", metavar="NAME", default=None,
                     help="hold this pin at its locked revision; repeatable")
+    up.add_argument("--workers", type=int, default=None, metavar="N",
+                    help=workers_help)
     up.set_defaults(func=cmd_update)
 
     it = sub.add_parser("init", help="vendor the resolver into this project")
@@ -488,10 +498,17 @@ def main(argv: list[str] | None = None) -> int:
     lk = sub.add_parser("look", help="report drift without writing")
     lk.add_argument("--root", action="append", type=Path, default=None,
                     help=root_help)
+    lk.add_argument("--workers", type=int, default=None, metavar="N",
+                    help=workers_help)
     lk.set_defaults(func=cmd_look)
 
     args = parser.parse_args(argv)
     try:
+        if getattr(args, "workers", None) is not None and args.workers < 1:
+            raise UsageError(
+                f"--workers must be at least 1, got {args.workers}. "
+                f"ThreadPoolExecutor refuses a pool of none."
+            )
         return args.func(args)
     except (ProjectError, UsageError) as e:
         # Running outside a project is a usage mistake, not a crash.

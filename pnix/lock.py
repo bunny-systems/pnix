@@ -36,7 +36,20 @@ schema-4 resolver already forwards.
 import json
 from pathlib import Path
 
+import pnix
+
 SCHEMA = 4
+
+#: Which pnix wrote this lock. Top-level, alongside `schema`, and deliberately
+#: *not* a schema bump: the vendored resolver reads `schema` and `pins` and
+#: nothing else, so an older resolver ignores this field rather than being
+#: silently wrong about it -- the test every additive lock field has to pass.
+#:
+#: `schema` says what shape the file is; it does not say which code produced it,
+#: and those differ. Two bugs this month were "the lock is missing a field it
+#: should have" and neither could be triaged without asking the reporter which
+#: pnix they ran. A lock that answers that itself costs one line per update.
+WRITER = "pnix"
 
 
 class SchemaError(Exception):
@@ -130,5 +143,9 @@ def write(path: Path, pins: dict[str, dict]) -> None:
     # `pnix update` before `pnix init` is a legitimate order, and .pnix/
     # may not exist yet.
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc = {"schema": SCHEMA, "pins": {k: pins[k] for k in sorted(pins)}}
+    doc = {
+        "schema": SCHEMA,
+        WRITER: pnix.__version__,
+        "pins": {k: pins[k] for k in sorted(pins)},
+    }
     path.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n")

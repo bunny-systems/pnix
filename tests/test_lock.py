@@ -116,3 +116,28 @@ def test_a_current_lock_reports_no_migration(tmp_path):
 def test_every_schema_below_current_has_a_migration():
     """A bump with no entry here is a bump that cannot be crossed."""
     assert set(lock.MIGRATIONS) == set(range(1, lock.SCHEMA))
+
+
+def test_write_records_the_pnix_that_wrote_it(tmp_path):
+    """Which pnix wrote a lock is the first question a bug report needs and the
+    one thing the file could never answer."""
+    import pnix
+
+    path = tmp_path / "pins.lock.json"
+    lock.write(path, {"a": {"rev": "1" * 40}})
+    doc = json.loads(path.read_text())
+    assert doc["pnix"] == pnix.__version__
+
+
+def test_a_lock_without_a_writer_still_reads(tmp_path):
+    """Additive, not a schema bump: every lock written before this field is
+    still exactly as valid as it was."""
+    path = tmp_path / "pins.lock.json"
+    path.write_text(json.dumps({"schema": lock.SCHEMA, "pins": {"a": {"rev": "1"}}}))
+    assert lock.read(path) == {"a": {"rev": "1"}}
+
+
+def test_the_writer_is_not_mistaken_for_a_pin(tmp_path):
+    path = tmp_path / "pins.lock.json"
+    lock.write(path, {"a": {"rev": "1" * 40}})
+    assert set(lock.read(path)) == {"a"}

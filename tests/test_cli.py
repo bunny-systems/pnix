@@ -513,3 +513,15 @@ def test_update_reports_a_patch_whose_pr_has_merged(fake_project, capsys, monkey
     )
     cli.main(["--project", str(fake_project), "update"])
     assert "PR #7 is merged upstream" in capsys.readouterr().err
+
+
+def test_workers_can_be_named(fake_project):
+    assert cli.main(["--project", str(fake_project), "update", "--workers", "1"]) == 0
+    assert cli.main(["--project", str(fake_project), "look", "--workers", "2"]) == 0
+
+
+def test_zero_workers_is_refused(fake_project, capsys):
+    """ThreadPoolExecutor(max_workers=0) raises ValueError deep in the stdlib;
+    refusing it here is the difference between a usage error and a traceback."""
+    assert cli.main(["--project", str(fake_project), "update", "--workers", "0"]) == 2
+    assert "workers" in capsys.readouterr().err

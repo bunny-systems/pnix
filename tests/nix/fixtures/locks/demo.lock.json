@@ -1,5 +1,6 @@
 {
   "schema": 4,
+  "pnix": "9.9.9",
   "pins": {
     "consumer": {
       "type": "github",
