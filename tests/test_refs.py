@@ -186,3 +186,97 @@ def test_an_explicit_rev_needs_no_network(monkeypatch):
     monkeypatch.setattr(refs, "_ls_remote",
                         lambda *a: (_ for _ in ()).throw(AssertionError("network")))
     assert refs.resolve_for("u", {"rev": "e" * 40, "ref": "main"})["rev"] == "e" * 40
+
+
+# --- ref cache integration ------------------------------------------------
+#
+# The seam is `_ls_remote`, the single place all three lookup shapes go through,
+# so `resolve`, `resolve_tag` and `tags` are all covered by wiring one function.
+
+def _counting_git(monkeypatch, stdout: str):
+    calls = []
+
+    class Proc:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self):
+            self.stdout = stdout
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return Proc()
+
+    monkeypatch.setattr("subprocess.run", run)
+    return calls
+
+
+def test_without_a_cache_every_call_hits_the_remote(monkeypatch):
+    calls = _counting_git(monkeypatch, f"{'a' * 40}\trefs/heads/main\n")
+    refs.resolve("https://x/y", "main")
+    refs.resolve("https://x/y", "main")
+    assert len(calls) == 2
+
+
+def test_with_a_cache_the_second_call_is_free(monkeypatch, tmp_path):
+    from pnix import refcache
+
+    calls = _counting_git(monkeypatch, f"{'a' * 40}\trefs/heads/main\n")
+    cache = refcache.Cache(tmp_path / "refs.json")
+    monkeypatch.setattr(refs, "CACHE", cache)
+    assert refs.resolve("https://x/y", "main") == "a" * 40
+    assert refs.resolve("https://x/y", "main") == "a" * 40
+    assert len(calls) == 1
+
+
+def test_a_cached_answer_is_interpreted_the_same_way(monkeypatch, tmp_path):
+    """Rows are cached, not a chosen rev, so `_pick`'s precedence runs on the
+    cached path exactly as it does live. An annotated tag is the case that would
+    break if a rev were cached instead: the peeled row must still win."""
+    from pnix import refcache
+
+    stdout = (f"{'b' * 40}\trefs/tags/v1\n"
+              f"{'c' * 40}\trefs/tags/v1^{{}}\n")
+    calls = _counting_git(monkeypatch, stdout)
+    monkeypatch.setattr(refs, "CACHE", refcache.Cache(tmp_path / "refs.json"))
+    live = refs.resolve("https://x/y", "v1")
+    cached = refs.resolve("https://x/y", "v1")
+    assert live == cached == "c" * 40
+    assert len(calls) == 1
+
+
+def test_a_failure_is_not_cached(monkeypatch, tmp_path):
+    """A typo'd ref must error every run, and a transient network failure must
+    not stick for an hour."""
+    from pnix import refcache
+
+    calls = []
+
+    class Proc:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: could not read from remote"
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return Proc()
+
+    monkeypatch.setattr("subprocess.run", run)
+    monkeypatch.setattr(refs, "CACHE", refcache.Cache(tmp_path / "refs.json"))
+    for _ in range(2):
+        with pytest.raises(refs.RefError):
+            refs.resolve("https://x/y", "nope")
+    assert len(calls) == 2
+
+
+def test_an_empty_answer_is_not_cached(monkeypatch, tmp_path):
+    """`ls-remote` exiting 0 with no rows means the ref does not exist. Caching
+    that would hide a branch appearing for a whole TTL."""
+    from pnix import refcache
+
+    calls = _counting_git(monkeypatch, "")
+    monkeypatch.setattr(refs, "CACHE", refcache.Cache(tmp_path / "refs.json"))
+    for _ in range(2):
+        with pytest.raises(refs.RefError):
+            refs.resolve("https://x/y", "main")
+    assert len(calls) == 2

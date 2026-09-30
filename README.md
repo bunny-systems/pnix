@@ -109,6 +109,7 @@ reported.
 | `-v`, `--verbose` | `update` | also report each download as it starts |
 | `--exclude NAME` | `update` | hold this pin at its locked revision; repeatable |
 | `--workers N` | `update`, `look` | how many pins to resolve at once; default 8 |
+| `--refresh` | `update`, `look` | ignore cached ref lookups; they expire after 60 minutes |
 | `names…` | `update` | update only these pins; the rest keep their locked entry |
 
 `update` reports each pin on stderr as it lands, and announces a download

@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from pnix import __version__, discover, refs, schema, sources, vendor
+from pnix import __version__, discover, refcache, refs, schema, sources, vendor
 from pnix import collect as collect_mod
 from pnix import lock as lock_mod
 from pnix import patches as patches_mod
@@ -214,7 +214,8 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                  quiet: bool = True,
                  verbose: bool = False,
                  exclude: list[str] | None = None,
-                 workers: int | None = None) -> tuple[dict, dict]:
+                 workers: int | None = None,
+                 cache: refcache.Cache | None = None) -> tuple[dict, dict]:
     """Resolve every declared pin. Returns (resolved, previous lock contents).
 
     `prefetch=False` is what makes `pnix look` cheap: resolving a ref is one
@@ -350,19 +351,41 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         return name, locked
 
     if todo:
-        # One pin is one network round-trip, so the pool is sized by how many
-        # requests are worth having in flight, not by cores. Capped at the
-        # number of pins because an idle thread still costs a thread.
-        with ThreadPoolExecutor(
-            max_workers=min(workers or refs.DEFAULT_WORKERS, len(todo))
-        ) as pool:
-            for name, locked in pool.map(one, list(todo)):
-                result[name] = locked
+        # The cache is installed for the duration of the pool and flushed once
+        # after it: eight threads share the object, so reading before they start
+        # and writing after they finish avoids locking the file per access.
+        refs.CACHE = cache
+        try:
+            # One pin is one network round-trip, so the pool is sized by how many
+            # requests are worth having in flight, not by cores. Capped at the
+            # number of pins because an idle thread still costs a thread.
+            with ThreadPoolExecutor(
+                max_workers=min(workers or refs.DEFAULT_WORKERS, len(todo))
+            ) as pool:
+                for name, locked in pool.map(one, list(todo)):
+                    result[name] = locked
+        finally:
+            refs.CACHE = None
+            if cache is not None:
+                cache.save()
     progress.summary()
 
     if write:
         lock_mod.write(lock_path, result)
     return result, existing
+
+
+def _cache_for(args, names: list[str] | None = None) -> refcache.Cache | None:
+    """The cache this run may use, or None.
+
+    Two ways to say "ask the remote": `--refresh`, and naming a pin. Naming one
+    is already how you say "that pin, now", so honouring the cache for it would
+    contradict the request -- and a named run resolves only what was named, so
+    there is nothing else to keep cheap.
+    """
+    if args.refresh or names:
+        return None
+    return refcache.open_default()
 
 
 def _warn_if_stale(project: Path) -> None:
@@ -393,7 +416,8 @@ def cmd_update(args) -> int:
     resolved, _ = _resolve_all(project, args.names, write=True,
                                roots=args.root, quiet=args.quiet,
                                verbose=args.verbose, exclude=args.exclude,
-                               workers=args.workers)
+                               workers=args.workers,
+                               cache=_cache_for(args, args.names))
     for name in sorted(resolved):
         # `advice` reads the entry `update` just wrote and costs no request, so
         # there is no reason to make it exclusive to `look`: a patch tracking a
@@ -428,8 +452,10 @@ def cmd_init(args) -> int:
 def cmd_look(args) -> int:
     project = find_project(args.project)
     _warn_if_stale(project)
+    cache = _cache_for(args)
     fresh, existing = _resolve_all(project, [], write=False, roots=args.root,
-                                   prefetch=False, workers=args.workers)
+                                   prefetch=False, workers=args.workers,
+                                   cache=cache)
     moved = False
     for name in sorted(fresh):
         old = existing.get(name, {}).get("rev")
@@ -455,6 +481,16 @@ def cmd_look(args) -> int:
             print(f"{name}: {line}")
     if not moved:
         print("all pins current")
+
+    # `look` reports drift, so a cached answer is precisely when it would fail
+    # to. Stale is acceptable; silently stale is not.
+    if cache is not None and cache.ages:
+        oldest = max(cache.ages.values())
+        print(f"pnix: {len(cache.ages)} ref"
+              f"{'' if len(cache.ages) == 1 else 's'} answered from cache, "
+              f"up to {int(oldest // 60)}m{int(oldest % 60)}s old "
+              f"-- pass --refresh to re-check",
+              file=sys.stderr)
     return 0
 
 
@@ -475,6 +511,8 @@ def main(argv: list[str] | None = None) -> int:
                  "defaults to the project root")
     workers_help = (f"how many pins to resolve at once "
                     f"(default {refs.DEFAULT_WORKERS})")
+    refresh_help = (f"ignore cached ref lookups (they expire after "
+                    f"{refcache.TTL // 60} minutes)")
 
     up = sub.add_parser("update", help="resolve and write the lock")
     up.add_argument("names", nargs="*", help="pins to update; default all")
@@ -488,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="hold this pin at its locked revision; repeatable")
     up.add_argument("--workers", type=int, default=None, metavar="N",
                     help=workers_help)
+    up.add_argument("--refresh", action="store_true", help=refresh_help)
     up.set_defaults(func=cmd_update)
 
     it = sub.add_parser("init", help="vendor the resolver into this project")
@@ -500,6 +539,7 @@ def main(argv: list[str] | None = None) -> int:
                     help=root_help)
     lk.add_argument("--workers", type=int, default=None, metavar="N",
                     help=workers_help)
+    lk.add_argument("--refresh", action="store_true", help=refresh_help)
     lk.set_defaults(func=cmd_look)
 
     args = parser.parse_args(argv)

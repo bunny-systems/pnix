@@ -525,3 +525,92 @@ def test_zero_workers_is_refused(fake_project, capsys):
     refusing it here is the difference between a usage error and a traceback."""
     assert cli.main(["--project", str(fake_project), "update", "--workers", "0"]) == 2
     assert "workers" in capsys.readouterr().err
+
+
+# --- ref cache -----------------------------------------------------------
+#
+# These stub `subprocess.run`, not `refs.resolve`: the cache lives inside
+# `_ls_remote`, below `resolve`, so stubbing `resolve` would take the code under
+# test out of the picture entirely.
+
+@pytest.fixture
+def cached_project(tmp_path, monkeypatch):
+    """Like `fake_project`, but ref resolution really runs -- against a fake git."""
+    monkeypatch.setattr(
+        "pnix.collect.collect",
+        lambda files, attr="pins": (
+            {"foo": {"type": "github", "url": "https://github.com/o/r",
+                     "ref": "main"}},
+            {"foo": "/decl.nix"},
+            [],
+        ),
+    )
+    monkeypatch.setattr("pnix.prefetch.tarball",
+                        lambda url: ("sha256-AAA", 1788914643))
+    monkeypatch.setattr("pnix.discover.candidates",
+                        lambda roots, attr="pins": [tmp_path / "decl.nix"])
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    calls = []
+
+    class Proc:
+        returncode = 0
+        stderr = ""
+        stdout = f"{'1' * 40}\trefs/heads/main\n"
+
+    def run(cmd, **kw):
+        if cmd[:2] == ["git", "ls-remote"]:
+            calls.append(cmd)
+            return Proc()
+        raise AssertionError(f"unexpected subprocess: {cmd}")
+
+    monkeypatch.setattr("subprocess.run", run)
+    return tmp_path, calls
+
+
+def test_a_second_command_reuses_the_cached_rev(cached_project):
+    """`look` then `update` is the common pair, and the whole point is that the
+    second one does not pay for the refs again."""
+    project, calls = cached_project
+    cli.main(["--project", str(project), "look"])
+    assert len(calls) == 1
+    cli.main(["--project", str(project), "look"])
+    assert len(calls) == 1, "the second look should have come from the cache"
+
+
+def test_refresh_bypasses_the_cache(cached_project):
+    project, calls = cached_project
+    cli.main(["--project", str(project), "look"])
+    cli.main(["--project", str(project), "look", "--refresh"])
+    assert len(calls) == 2
+
+
+def test_naming_a_pin_bypasses_the_cache(cached_project):
+    """Naming a pin is how you say "that one, fresh"."""
+    project, calls = cached_project
+    cli.main(["--project", str(project), "update"])
+    cli.main(["--project", str(project), "update", "foo"])
+    assert len(calls) == 2
+
+
+def test_look_says_when_an_answer_came_from_cache(cached_project, capsys):
+    """A drift reporter may be stale, but never silently: `look` exists to catch
+    a moved pin, and a cache hit is exactly when it would miss one."""
+    project, _ = cached_project
+    cli.main(["--project", str(project), "look"])
+    capsys.readouterr()
+    cli.main(["--project", str(project), "look"])
+    out = capsys.readouterr()
+    assert "cache" in (out.out + out.err).lower()
+    assert "--refresh" in (out.out + out.err)
+
+
+def test_update_does_not_announce_the_cache(cached_project, capsys):
+    """For `update` a cached rev is a real rev, just not the newest, so it is
+    used silently -- the opposite of `look`."""
+    project, _ = cached_project
+    cli.main(["--project", str(project), "update"])
+    capsys.readouterr()
+    cli.main(["--project", str(project), "update"])
+    out = capsys.readouterr()
+    assert "--refresh" not in (out.out + out.err)

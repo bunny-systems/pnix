@@ -9,6 +9,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pnix import semver
 
+#: A `refcache.Cache`, or None to talk to every remote every time.
+#:
+#: Module-level rather than a parameter because the callers in between are the
+#: source classes -- `sources/github.py` and friends call `resolve` directly --
+#: and threading a cache through all of them would put a caching concern in
+#: every one. The CLI owns the lifetime: it installs a cache, runs the pool, and
+#: flushes once.
+CACHE = None
+
 SHA_LEN = 40
 
 # 21 pins at ~0.86 s each is ~18 s serially. These are independent network
@@ -26,6 +35,20 @@ class RefError(Exception):
 
 
 def _ls_remote(url: str, *patterns: str) -> list[tuple[str, str]]:
+    """The one place every ref lookup goes through, and so the cache's seam.
+
+    Caching here rather than in `resolve`/`resolve_tag`/`tags` means the cached
+    value is the remote's *rows*, and each caller's picking and peeling logic
+    still runs on them. A hit cannot change how an answer is interpreted, only
+    where the bytes came from -- which is what makes the cache safe for an
+    annotated tag, where the chosen rev depends on `_pick`'s precedence.
+    """
+    key = (url, tuple(patterns))
+    if CACHE is not None:
+        hit = CACHE.get(key)
+        if hit is not None:
+            return [(sha, name) for sha, name in hit]
+
     # A leading `--flag` is an option to ls-remote, not a ref pattern.
     flags = [p for p in patterns if p.startswith("--")]
     refs_ = [p for p in patterns if not p.startswith("--")]
@@ -42,6 +65,13 @@ def _ls_remote(url: str, *patterns: str) -> list[tuple[str, str]]:
             continue
         sha, _, name = line.partition("\t")
         rows.append((sha.strip(), name.strip()))
+
+    # Neither a failure nor an empty answer is cached. A typo'd ref has to error
+    # on every run, a transient network failure must not stick for an hour, and
+    # no rows means the ref does not exist yet -- caching that would hide a
+    # branch appearing for a whole TTL.
+    if CACHE is not None and rows:
+        CACHE.put(key, [[sha, name] for sha, name in rows])
     return rows
 
 
