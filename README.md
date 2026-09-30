@@ -108,6 +108,7 @@ reported.
 | `-q`, `--quiet` | `update` | no per-pin progress; warnings and errors still print |
 | `-v`, `--verbose` | `update` | also report each download as it starts |
 | `--exclude NAME` | `update` | hold this pin at its locked revision; repeatable |
+| `--workers N` | `update`, `look` | how many pins to resolve at once; default 8 |
 | `names…` | `update` | update only these pins; the rest keep their locked entry |
 
 `update` reports each pin on stderr as it lands, and announces a download
@@ -686,6 +687,34 @@ pins.finix = {
 A near-miss variable name is caught rather than ignored — `PNIX_OVERRIDES` and
 `TACK_OVERRIDES` both throw, since pnix cannot warn about a variable it does not
 read and the plural is what a tack migrant's fingers type.
+
+### `PNIX_OVERRIDE` does nothing under a flake
+
+`nix build .#…`, `nix develop`, `nix flake check` — every one of those evaluates
+*purely*, and pure evaluation has no environment:
+
+```sh
+$ PNIX_OVERRIDE=finix=/home/me/finix \
+    nix-instantiate --eval --pure-eval -E 'builtins.getEnv "PNIX_OVERRIDE"'
+""
+```
+
+So the variable is read, comes back empty, and the build silently uses the
+locked pin. No warning is possible: pnix cannot report a variable it is not
+allowed to see, and an empty one is indistinguishable from an unset one.
+
+```sh
+nixos-rebuild switch --file .          # impure entry point, honours the variable
+nix build .#thing --impure             # same evaluation, environment restored
+```
+
+```nix
+import ./.pnix { overrides = { finix = ../finix; }; }   # no environment involved
+```
+
+The programmatic layer is the only one that works under pure evaluation, which is
+also why it exists: `overrides` is an argument, and an argument survives where a
+variable cannot.
 
 All of them override **resolution, not declaration** — nothing is re-locked, and
 changing a rev is still `pnix update`. Every failure throws: an unknown pin name
