@@ -108,7 +108,7 @@ reported.
 | `-q`, `--quiet` | `update` | no per-pin progress; warnings and errors still print |
 | `-v`, `--verbose` | `update` | also report each download as it starts |
 | `--exclude NAME` | `update` | hold this pin at its locked revision; repeatable |
-| `--workers N` | `update`, `look` | how many pins to resolve at once; default 8 |
+| `--workers N` | `update`, `look` | how many pins to resolve at once; default 16 |
 | `--refresh` | `update`, `look` | ignore cached ref lookups; they expire after 60 minutes |
 | `--exit-code` | `look` | exit 1 when anything has drifted, for CI |
 | `--nixpkgs-pin NAME` | `update` | which pin supplies the nixpkgs that applies patches, when it is not called `nixpkgs` |

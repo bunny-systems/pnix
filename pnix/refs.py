@@ -21,9 +21,15 @@ CACHE = None
 SHA_LEN = 40
 
 # 21 pins at ~0.86 s each is ~18 s serially. These are independent network
-# round-trips, so the pool is pure win; 8 is well under any forge's rate limit
-# for ls-remote and keeps the failure output readable.
-DEFAULT_WORKERS = 8
+# round-trips, so the pool is pure win, and well under any forge's rate limit
+# for ls-remote -- `ls-remote` has no quota, unlike the forge APIs.
+#
+# 16 rather than 8, measured 2026-10-01 on the 20 pins of consumer #1 with an
+# empty store and an empty cache: a cold `update` went 30.9 s -> 25.4 s. It is
+# also what tack uses (`UPDATE_IN_FLIGHT`), whose cold run was 18.9 s on the
+# same set -- the rest of that gap is its GitHub API ref lookups, which cost a
+# rate limit pnix deliberately does not spend.
+DEFAULT_WORKERS = 16
 
 # Peeled refs. `git ls-remote <url> <tag>` alone never emits this line —
 # measured on git 2.55.0 — so the peel pattern has to be asked for explicitly.
