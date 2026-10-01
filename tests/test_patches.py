@@ -79,7 +79,10 @@ def test_a_local_patch_is_recorded_relative_to_the_lock(fake, tmp_path):
     p = tmp_path / "patches" / "fix.diff"
     p.write_text("diff --git a/x b/x\n")
     node = patches.resolve_one(str(p), SPEC, "p", tmp_path)
-    assert node == {"kind": "path", "path": "../patches/fix.diff"}
+    assert node["kind"] == "path"
+    assert node["path"] == "../patches/fix.diff"
+    # The file's own hash, so an edit to it is evidence rather than invisible.
+    assert node["hash"].startswith("sha256-")
 
 
 def test_the_recorded_patch_path_resolves_from_the_lock_directory(fake, tmp_path):
@@ -182,7 +185,7 @@ def test_drift_reports_new_commits_and_a_rebase(monkeypatch):
             "owner": "o", "repo": "r",
             "patches": [{"kind": "pr", "forge": "github", "number": 7,
                          "head": "h" * 40, "base": "b" * 40, "merged": False}]}
-    lines = patches.drift(node)
+    lines = patches.drift(node, "foo")
     assert any("new commits" in line for line in lines)
     assert any("rebased onto a new base" in line for line in lines)
 
@@ -194,7 +197,7 @@ def test_drift_reports_a_merge_that_happened_after_locking(monkeypatch):
     node = {"url": "https://github.com/o/r",
             "patches": [{"kind": "pr", "forge": "github", "number": 7,
                          "head": "h" * 40, "base": "b" * 40, "merged": False}]}
-    assert "merged since you locked" in patches.drift(node)[0]
+    assert "merged since you locked" in patches.drift(node, "foo")[0]
 
 
 def test_drift_survives_a_forge_it_cannot_reach(monkeypatch):
@@ -202,7 +205,7 @@ def test_drift_survives_a_forge_it_cannot_reach(monkeypatch):
     node = {"url": "https://github.com/o/r",
             "patches": [{"kind": "pr", "forge": "github", "number": 7,
                          "head": "h" * 40, "base": "b" * 40}]}
-    assert "could not check" in patches.drift(node)[0]
+    assert "could not check" in patches.drift(node, "foo")[0]
 
 
 def test_the_forge_registry_refuses_to_guess_at_gitlab():
@@ -283,7 +286,7 @@ def test_drift_follows_the_patch_repo_not_the_pin(monkeypatch):
             "patches": [{"kind": "pr", "forge": "github", "host": "github.com",
                          "owner": "rasmus-kirk", "repo": "nixarr", "number": 42,
                          "head": "h" * 40, "base": "b" * 40}]}
-    patches.drift(node)
+    patches.drift(node, "foo")
     assert seen == {"owner": "rasmus-kirk", "repo": "nixarr"}
 
 
@@ -330,3 +333,64 @@ def test_a_patch_repo_that_is_not_a_url_is_refused(tmp_path):
                    "patches": [{"pr": 1, "repo": "nixarr"}]}},
             {"p": "/decl.nix"})
     assert "is not a repository URL" in str(e.value)
+
+
+def test_drift_names_the_command_that_adopts_new_commits(monkeypatch):
+    forge = FakeForge(pull=Pull(head="n" * 40, base="b" * 40,
+                                state="open", merged=False))
+    monkeypatch.setattr("pnix.forges.get", lambda name: forge)
+    node = {"url": "https://github.com/o/r",
+            "patches": [{"kind": "pr", "forge": "github", "number": 7,
+                         "head": "h" * 40, "base": "b" * 40, "merged": False}]}
+    lines = patches.drift(node, "finit")
+    assert any("pnix update --repatch finit" in line for line in lines)
+
+
+def test_a_merged_pr_does_not_suggest_repatching(monkeypatch):
+    """Adopting more commits is not the fix for a patch upstream already has."""
+    forge = FakeForge(pull=Pull(head="h" * 40, base="b" * 40,
+                                state="closed", merged=True))
+    monkeypatch.setattr("pnix.forges.get", lambda name: forge)
+    node = {"url": "https://github.com/o/r",
+            "patches": [{"kind": "pr", "forge": "github", "number": 7,
+                         "head": "h" * 40, "base": "b" * 40, "merged": False}]}
+    assert not any("--repatch" in line for line in patches.drift(node, "finit"))
+
+
+def test_a_local_patch_records_the_file_s_hash(tmp_path):
+    """Without it nothing can tell that an edited patch file changed the tree,
+    so a stale patchedHash survives every `pnix update`."""
+    (tmp_path / ".pnix").mkdir()
+    f = tmp_path / ".pnix" / "fix.patch"
+    f.write_text("--- a\n+++ b\n")
+    node = patches.resolve_one(str(f), SPEC, "foo", tmp_path)
+    assert node["kind"] == "path"
+    assert node["hash"].startswith("sha256-")
+
+    f.write_text("--- a\n+++ b\n@@ different @@\n")
+    moved = patches.resolve_one(str(f), SPEC, "foo", tmp_path)
+    assert moved["hash"] != node["hash"]
+
+
+def test_a_changed_local_patch_file_counts_as_drift(tmp_path):
+    (tmp_path / ".pnix").mkdir()
+    f = tmp_path / ".pnix" / "fix.patch"
+    f.write_text("one\n")
+    node = {"patches": [patches.resolve_one(str(f), SPEC, "foo", tmp_path)]}
+    assert not patches.local_patch_drifted(node, tmp_path)
+    f.write_text("two\n")
+    assert patches.local_patch_drifted(node, tmp_path)
+
+
+def test_a_patch_node_with_no_local_file_never_drifts(tmp_path):
+    node = {"patches": [{"kind": "pr", "url": "u", "hash": "sha256-AAA"}]}
+    assert not patches.local_patch_drifted(node, tmp_path)
+
+
+def test_a_vanished_local_patch_counts_as_drift(tmp_path):
+    """Better to re-resolve and report the missing file than to keep a hash for
+    a patch that is no longer there."""
+    (tmp_path / ".pnix").mkdir()
+    node = {"patches": [{"kind": "path", "path": "gone.patch",
+                         "hash": "sha256-AAA"}]}
+    assert patches.local_patch_drifted(node, tmp_path)

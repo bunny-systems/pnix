@@ -110,4 +110,90 @@ in
       }).nixpkgs.rev;
     expected = "4444444444444444444444444444444444444444";
   }
+
+  # With a patchedHash the output is content-addressed, so `system` no longer
+  # decides the result and pure evaluation stops being a dead end.
+  {
+    name = "a hashed patched pin resolves with no system to build for";
+    expr =
+      (resolve {
+        lockFile = ./fixtures/locks/patched-hashed.lock.json;
+        system = null;
+        overrides = {
+          nixpkgs = flakes + "/fakepkgs";
+          patched = flakes + "/simple";
+        };
+      }).patched.narHash;
+    expected = "sha256-XVVwVmNhl3JAxgVm4sm8IBGsvgRcmHTkxBWDE+t7CWc=";
+  }
+  {
+    name = "an unpatched pin still reports its fetch hash as narHash";
+    expr =
+      (resolve {
+        lockFile = ./fixtures/locks/patched-hashed.lock.json;
+        system = null;
+        overrides = {
+          nixpkgs = flakes + "/fakepkgs";
+          patched = flakes + "/simple";
+        };
+      }).nixpkgs.narHash;
+    expected = "sha256-DDD";
+  }
+  {
+    name = "patchedOnly exposes just the patched pins, as derivations";
+    expr = builtins.attrNames (resolve {
+      lockFile = ./fixtures/locks/patched-hashed.lock.json;
+      patchedOnly = true;
+      overrides = {
+        nixpkgs = flakes + "/fakepkgs";
+        patched = flakes + "/simple";
+      };
+    });
+    expected = [ "patched" ];
+  }
+  # Forces `patchPkgs` itself with no system: the narHash cases above read a
+  # value straight from the lock and never build anything, so they cannot tell a
+  # working fallback from a throw. This is the pure-eval path the whole change
+  # exists for, and `fakepkgs` records the system it was called with.
+  {
+    name = "with no system, patchPkgs falls back instead of refusing";
+    expr =
+      (resolve {
+        lockFile = ./fixtures/locks/patched-hashed.lock.json;
+        system = null;
+        patchedOnly = true;
+        overrides = {
+          nixpkgs = flakes + "/fakepkgs";
+          patched = flakes + "/simple";
+        };
+      }).patched.system;
+    expected = "x86_64-linux";
+  }
+  {
+    name = "an explicit system reaches patchPkgs unchanged";
+    expr =
+      (resolve {
+        lockFile = ./fixtures/locks/patched-hashed.lock.json;
+        system = "aarch64-linux";
+        patchedOnly = true;
+        overrides = {
+          nixpkgs = flakes + "/fakepkgs";
+          patched = flakes + "/simple";
+        };
+      }).patched.system;
+    expected = "aarch64-linux";
+  }
+  {
+    name = "patchedOnly hands back the applyPatches arguments, hash included";
+    expr =
+      (resolve {
+        lockFile = ./fixtures/locks/patched-hashed.lock.json;
+        patchedOnly = true;
+        overrides = {
+          nixpkgs = flakes + "/fakepkgs";
+          patched = flakes + "/simple";
+        };
+      }).patched.outputHash;
+    expected = "sha256-XVVwVmNhl3JAxgVm4sm8IBGsvgRcmHTkxBWDE+t7CWc=";
+  }
 ]

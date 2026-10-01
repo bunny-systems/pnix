@@ -30,7 +30,9 @@
         "kind": "tarball",
         "url": "https://github.com/o/patched/archive/5.tar.gz",
         "hash": "sha256-FFF"
-      }
+      },
+      "patchedHash": "sha256-XVVwVmNhl3JAxgVm4sm8IBGsvgRcmHTkxBWDE+t7CWc=",
+      "dir": "sub"
     }
   }
 }

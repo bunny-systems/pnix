@@ -31,6 +31,15 @@ It should be the last bump of this shape. The fetchers are now flat
 passthroughs: every field of a `fetch` node except `kind` and `hash` reaches the
 builtin unchanged, so a future fetchGit option is a pure Python change that any
 schema-4 resolver already forwards.
+
+Schema 5 (2026-09-30) adds `patchedHash`: the recursive SRI hash of a pin's
+patched tree, which makes the patch application a fixed-output derivation and so
+pins the patched store path in the lock rather than deriving it from whichever
+nixpkgs applied the diff. It is a bump and not an additive field, even though a
+resolver predating it still produces correct *content*. The reason is narrower
+than schema 3's: two machines on different pnix versions would build that content
+at two different paths from one lock, which is exactly the divergence the field
+exists to remove. An old resolver must refuse rather than disagree.
 """
 
 import json
@@ -38,7 +47,7 @@ from pathlib import Path
 
 import pnix
 
-SCHEMA = 4
+SCHEMA = 5
 
 #: Which pnix wrote this lock. Top-level, alongside `schema`, and deliberately
 #: *not* a schema bump: the vendored resolver reads `schema` and `pins` and
@@ -86,6 +95,7 @@ MIGRATIONS = {
     1: _add_fetch,
     2: lambda pins: pins,
     3: lambda pins: pins,
+    4: lambda pins: pins,
 }
 
 

@@ -30,11 +30,19 @@
   # system.
   #
   # `builtins.currentSystem` does not exist under pure evaluation, which is
-  # every `nix build .#...` of a flake, so it cannot simply be read where it is
-  # needed: a pin gains patches and a consumer that always evaluated purely
-  # starts failing sixty frames deep inside nixpkgs' impure.nix. Default to it
-  # where it exists, and ask for it where it does not.
+  # every `nix build .#...` of a flake. With a `patchedHash` in the lock that no
+  # longer matters for the *result*: the output is content-addressed, so a wrong
+  # value costs only the ability to build the tree natively, never correctness.
+  # So this falls back to a literal below, and `patch.nix` raises per pin where
+  # the pin has no hash and `system` still decides its path.
   system ? builtins.currentSystem or null,
+
+  # pnix's own lock-time entry point: `{ <pin> = <the applyPatches derivation>; }`
+  # for the pins that declare patches. `pnix update` builds these to learn their
+  # hashes. It shares every line of the real path deliberately -- a second
+  # expression that built the tree its own way would be free to disagree with
+  # the resolver, and the hash would then be wrong in the one way nothing checks.
+  patchedOnly ? false,
 }:
 let
   fetchers = import ./fetchers.nix { };
@@ -56,7 +64,7 @@ let
         hash = patch.hash;
       };
 
-  SCHEMA = 4;
+  SCHEMA = 5;
 
   doc = builtins.fromJSON (builtins.readFile lockFile);
   schema = doc.schema or (throw "pnix: ${toString lockFile} has no `schema`");
@@ -108,19 +116,22 @@ let
   # ~/.config/nixpkgs/config.nix, and impure-overlays.nix reads $NIXPKGS_OVERLAYS
   # or ~/.config/nixpkgs/overlays. Left alone, whatever happens to be in the
   # invoking user's home would decide how a pin's patches get applied.
+  # A literal is safe here only because a patched pin's path comes from its
+  # recorded hash; on a machine of another arch, pass `system` so the tree can
+  # actually be built when it is not already in the store or a cache.
+  buildSystem = if system == null then "x86_64-linux" else system;
+
   patchPkgs =
     if !(rawSources ? ${nixpkgsPin}) then
       throw "pnix: a pin declares patches, which need a nixpkgs to apply them, but there is no pin called '${nixpkgsPin}'. Pass `nixpkgsPin` to name it."
-    else if system == null then
-      throw "pnix: a pin declares patches, which have to be built, but this evaluation is pure and so has no `builtins.currentSystem` to build them for. Pass `system`, e.g. `import ./.pnix { system = \"x86_64-linux\"; }`."
     else
       import rawSources.${nixpkgsPin} {
-        inherit system;
+        system = buildSystem;
         config = { };
         overlays = [ ];
       };
 
-  applyTo = import ./patch.nix { inherit patchPkgs fetchPatch; };
+  applyTo = import ./patch.nix { inherit patchPkgs fetchPatch system; };
 
   patchedSources = builtins.mapAttrs (
     name: src:
@@ -169,18 +180,24 @@ let
       else
         { }
     )
-    // (if node ? narHash then { inherit (node) narHash; } else { })
+    # A patched pin's `outPath` is the patched tree, so its `narHash` has to be
+    # that tree's hash and not the unpatched fetch's -- the two described
+    # different trees until schema 5 gave the patched one a name.
+    // (
+      if node ? patchedHash then
+        { narHash = node.patchedHash; }
+      else if node ? narHash then
+        { inherit (node) narHash; }
+      else if node ? fetch && node.fetch ? hash then
+        { narHash = node.fetch.hash; }
+      else
+        { }
+    )
     # A channel has no rev; its version string is the only thing that names
     # which nixpkgs it is. Unlike `patches`, a resolver that predates this field
     # just does not expose it -- a missing attribute errors loudly rather than
     # producing a quietly wrong result, so it needs no schema bump.
     // (if node ? version then { inherit (node) version; } else { })
-    // (
-      if node ? fetch && node.fetch ? hash && !(node ? narHash) then
-        { narHash = node.fetch.hash; }
-      else
-        { }
-    )
     // (if node ? flake then { inherit (node) flake; } else { });
 
   # The directory holding flake.nix. `dir` was in the schema from the start but
@@ -319,4 +336,20 @@ let
       sourceInfo
   ) pins;
 in
-allInputs
+if patchedOnly then
+  builtins.listToAttrs (
+    builtins.concatMap (
+      name:
+      if patchedSources.${name}.patched then
+        [
+          {
+            inherit name;
+            value = patchedSources.${name}.outPath;
+          }
+        ]
+      else
+        [ ]
+    ) (builtins.attrNames pins)
+  )
+else
+  allInputs

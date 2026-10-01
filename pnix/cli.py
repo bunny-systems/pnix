@@ -12,7 +12,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from pnix import __version__, discover, refcache, refs, schema, sources, vendor
+from pnix import (
+    __version__,
+    discover,
+    patchhash,
+    refcache,
+    refs,
+    schema,
+    sources,
+    vendor,
+)
 from pnix import collect as collect_mod
 from pnix import lock as lock_mod
 from pnix import patches as patches_mod
@@ -244,6 +253,47 @@ class Progress:
         )
 
 
+def _hash_patches(project: Path, result: dict, existing: dict,
+                  verify_patches: bool, nixpkgs_pin: str = "nixpkgs") -> None:
+    """Fill in `patchedHash` for every patched pin that needs one.
+
+    A patched pin's store path comes from this hash, so a pin whose patch set
+    and rev are unchanged keeps the recorded one rather than paying a rebuild to
+    arrive at the same value. `needs_recompute` owns that decision.
+    """
+    todo = [
+        name for name in sorted(result)
+        if patchhash.needs_recompute(result[name], existing.get(name, {}),
+                                     verify_all=verify_patches)
+    ]
+    for name, entry in result.items():
+        prior = existing.get(name, {})
+        if (entry.get("patches") and name not in todo
+                and "patchedHash" in prior):
+            entry["patchedHash"] = prior["patchedHash"]
+    if not todo:
+        return
+    fresh = patchhash.compute(project, result, todo,
+                              nixpkgs_pin=nixpkgs_pin)
+    for name, value in fresh.items():
+        prior = existing.get(name, {})
+        was = prior.get("patchedHash")
+        # Only worth saying when the patch set and the rev were both held still,
+        # because then the nixpkgs applying the diff is the only thing left to
+        # explain it. After `--repatch` adopted new commits, a different hash is
+        # the expected outcome and this sentence would be false.
+        held_still = (prior.get("patches") == result[name].get("patches")
+                      and prior.get("rev") == result[name].get("rev"))
+        if was is not None and was != value and held_still:
+            print(
+                f"pnix: {name}: patched tree changed ({was} -> {value}). The "
+                f"patch set is the same, so the nixpkgs applying it produced "
+                f"different bytes.",
+                file=sys.stderr,
+            )
+        result[name]["patchedHash"] = value
+
+
 def _resolve_all(project: Path, names: list[str], write: bool,
                  roots: list[Path] | None = None,
                  prefetch: bool = True,
@@ -252,7 +302,10 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                  exclude: list[str] | None = None,
                  workers: int | None = None,
                  cache: refcache.Cache | None = None,
-                 animate: bool = True) -> tuple[dict, dict]:
+                 animate: bool = True,
+                 verify_patches: bool = False,
+                 repatch: list[str] | None = None,
+                 nixpkgs_pin: str = "nixpkgs") -> tuple[dict, dict]:
     """Resolve every declared pin. Returns (resolved, previous lock contents).
 
     `prefetch=False` is what makes `pnix look` cheap: resolving a ref is one
@@ -267,7 +320,10 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         # schema and will refuse the file this run is about to write.
         print(
             f"pnix: lock is schema {migrated_from}, migrating to "
-            f"{lock_mod.SCHEMA}; run `pnix init` to update the vendored resolver",
+            f"{lock_mod.SCHEMA}. Run `pnix update` to write it and `pnix init` "
+            f"to re-vendor the resolver: the resolver compares the schema for "
+            f"equality, so a repo with only one of the two updated does not "
+            f"evaluate. Commit the lock and .pnix/ in one commit.",
             file=sys.stderr,
         )
     pins, _ = _collect(project, roots)
@@ -278,7 +334,10 @@ def _resolve_all(project: Path, names: list[str], write: bool,
     # entry, so a typo looked exactly like a successful no-op. The same applies
     # to `--exclude`, and more sharply: a misspelled exclusion updates the very
     # pin it was meant to hold still.
-    unknown = [n for n in [*(names or ()), *sorted(exclude)] if n not in pins]
+    unknown = [
+        n for n in [*(names or ()), *sorted(exclude), *(repatch or ())]
+        if n not in pins
+    ]
     if unknown:
         known = ", ".join(sorted(pins)) or "none declared"
         raise UsageError(
@@ -346,9 +405,25 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         # the declaration silently has no effect -- and for `dir` that means a
         # flake kept being looked for in the wrong directory.
         carried_stale = any(prior.get(k) != spec.get(k) for k in CARRIED_FIELDS)
+        # `--repatch` is the only way a moved PR head enters the lock. A patch
+        # declaration does not change when the branch it tracks does --
+        # `_patches_changed` compares declarations -- and adopting someone's
+        # force-pushed branch during an `update` run for something else is not a
+        # default worth having, so it is asked for. `repatch = []` means all.
+        repatching = repatch is not None and (
+            name in repatch if repatch else bool(spec.get("patches"))
+        )
+        # A local patch file lives in the consumer's tree, so the lock cannot
+        # pin it the way it pins a download -- only its recorded hash can say it
+        # moved. Without this an edited patch kept its `patchedHash`, and on the
+        # machine that wrote it the patched tree already existed, so Nix handed
+        # back the pre-edit tree with no rebuild and no error.
+        local_moved = patches_mod.local_patch_drifted(prior, project)
         if (_unchanged(spec, prior)
                 and not incomplete
                 and not carried_stale
+                and not repatching
+                and not local_moved
                 and prior.get("rev") == locked.get("rev")
                 and not _patches_changed(spec, prior)):
             progress.finish(name, prior, prior)
@@ -422,6 +497,39 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                 cache.save()
     progress.summary()
 
+    # `prefetch=False` is `look`, which reports through cmd_look instead and
+    # must never build.
+    if prefetch:
+        # Said before the hashing below, not after: hashing builds, a build can
+        # fail, and a merged PR is one of the likeliest reasons a patch stopped
+        # applying. Reporting it only on success would withhold the explanation
+        # exactly when it is needed.
+        #
+        # `advice` reads the entry `update` just wrote and costs no request, so
+        # there is no reason to make it exclusive to `look`. `drift` stays out --
+        # it compares the locked head against the current one, which `update`
+        # has just made identical.
+        for name in sorted(result):
+            for line in (patches_mod.advice(result[name])
+                         + patches_mod.applies_to(result[name])):
+                print(f"pnix: {name}: {line}", file=sys.stderr)
+            if result[name].get("type") == "path":
+                # A path pin carries no hash and names a directory on this
+                # machine only. In a committed lock it breaks every other clone.
+                print(
+                    f"pnix: {name}: is a path pin ({result[name]['path']}). It "
+                    f"has no hash and will not exist on another machine -- keep "
+                    f"it out of a committed declaration and use PNIX_OVERRIDE "
+                    f"instead.",
+                    file=sys.stderr,
+                )
+
+        # Patched trees are hashed after the pool, not inside it: the pool is
+        # sized for network round-trips, while this is one `nix-build` that Nix
+        # parallelises itself.
+        _hash_patches(project, result, existing, verify_patches,
+                      nixpkgs_pin)
+
     if write:
         lock_mod.write(lock_path, result)
     return result, existing
@@ -465,32 +573,15 @@ def _warn_if_stale(project: Path) -> None:
 def cmd_update(args) -> int:
     project = find_project(args.project)
     _warn_if_stale(project)
-    resolved, _ = _resolve_all(project, args.names, write=True,
+    _resolve_all(project, args.names, write=True,
                                roots=args.root, quiet=args.quiet,
                                verbose=args.verbose, exclude=args.exclude,
+                               verify_patches=args.verify_patches,
+                               repatch=args.repatch,
+                               nixpkgs_pin=args.nixpkgs_pin,
                                workers=args.workers,
                                cache=_cache_for(args, args.names),
                                animate=not args.quiet)
-    for name in sorted(resolved):
-        # `advice` reads the entry `update` just wrote and costs no request, so
-        # there is no reason to make it exclusive to `look`: a patch tracking a
-        # merged PR is carrying a diff upstream already has, and the run that
-        # locks it is the moment you want to hear that. `drift` stays out --
-        # it compares the locked head against the current one, which `update`
-        # has just made identical.
-        for line in patches_mod.advice(resolved[name]) + patches_mod.applies_to(
-            resolved[name]
-        ):
-            print(f"pnix: {name}: {line}", file=sys.stderr)
-        if resolved[name].get("type") == "path":
-            # A path pin carries no hash and names a directory on this machine
-            # only. In a committed lock it breaks every other clone.
-            print(
-                f"pnix: {name}: is a path pin ({resolved[name]['path']}). It "
-                f"has no hash and will not exist on another machine -- keep it "
-                f"out of a committed declaration and use PNIX_OVERRIDE instead.",
-                file=sys.stderr,
-            )
     return 0
 
 
@@ -544,7 +635,7 @@ def cmd_look(args) -> int:
     # time so nothing has to be diffed or cloned.
     for name in sorted(existing):
         node = existing[name]
-        for line in (patches_mod.advice(node) + patches_mod.drift(node)
+        for line in (patches_mod.advice(node) + patches_mod.drift(node, name)
                      + patches_mod.applies_to(node)):
             row(name, line)
     if not moved:
@@ -597,6 +688,21 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--workers", type=int, default=None, metavar="N",
                     help=workers_help)
     up.add_argument("--refresh", action="store_true", help=refresh_help)
+    up.add_argument(
+        "--nixpkgs-pin", metavar="NAME", default="nixpkgs",
+        help="which pin supplies the nixpkgs that applies patches, when it is "
+             "not called `nixpkgs`; matches the resolver's `nixpkgsPin`",
+    )
+    up.add_argument(
+        "--repatch", nargs="*", metavar="NAME", default=None,
+        help="re-resolve patch nodes for these pins (all patched pins when "
+             "none are named), adopting a tracked PR's new commits",
+    )
+    up.add_argument(
+        "--verify-patches", action="store_true",
+        help="rebuild every patched pin's tree and re-check its hash, even "
+             "when only the nixpkgs applying the patch moved",
+    )
     up.set_defaults(func=cmd_update)
 
     it = sub.add_parser("init", help="vendor the resolver into this project")
@@ -622,7 +728,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"ThreadPoolExecutor refuses a pool of none."
             )
         return args.func(args)
-    except (ProjectError, UsageError) as e:
+    except (ProjectError, UsageError, patchhash.PatchHashError) as e:
         # Running outside a project is a usage mistake, not a crash.
         print(f"pnix: {e}", file=sys.stderr)
         return 2

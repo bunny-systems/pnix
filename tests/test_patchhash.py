@@ -1,0 +1,347 @@
+import json
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from pnix import patchhash
+
+
+def test_recompute_when_there_is_no_hash_yet():
+    assert patchhash.needs_recompute({"patches": [1], "rev": "a"}, {})
+
+
+def test_no_recompute_when_nothing_about_the_patches_moved():
+    entry = {"patches": [{"hash": "H"}], "rev": "a", "patchedHash": "sha256-A"}
+    assert not patchhash.needs_recompute(entry, entry)
+
+
+def test_recompute_when_a_patch_node_moved():
+    prior = {"patches": [{"hash": "H"}], "rev": "a", "patchedHash": "sha256-A"}
+    now = {"patches": [{"hash": "J"}], "rev": "a", "patchedHash": "sha256-A"}
+    assert patchhash.needs_recompute(now, prior)
+
+
+def test_recompute_when_the_source_rev_moved():
+    prior = {"patches": [{"hash": "H"}], "rev": "a", "patchedHash": "sha256-A"}
+    now = {"patches": [{"hash": "H"}], "rev": "b", "patchedHash": "sha256-A"}
+    assert patchhash.needs_recompute(now, prior)
+
+
+def test_verify_all_recomputes_even_when_nothing_moved():
+    entry = {"patches": [{"hash": "H"}], "rev": "a", "patchedHash": "sha256-A"}
+    assert patchhash.needs_recompute(entry, entry, verify_all=True)
+
+
+def test_an_unpatched_pin_is_never_recomputed():
+    assert not patchhash.needs_recompute({"rev": "a"}, {}, verify_all=True)
+
+
+def _capture(monkeypatch, paths=2):
+    """Record every subprocess argv and answer it plausibly."""
+    calls = []
+
+    def fake_run(argv, *a, **kw):
+        calls.append(argv)
+        if argv[0] == "nix-build":
+            out = "\n".join(f"/nix/store/fake-{i}" for i in range(paths))
+            return subprocess.CompletedProcess(argv, 0, out + "\n", "")
+        if argv[0] == "nix-hash":
+            # Derived from the path, so a mis-ordered zip is observable. A
+            # constant here made the ordering test vacuous.
+            target = next(a for a in argv if a.startswith("/nix/store"))
+            return subprocess.CompletedProcess(
+                argv, 0, f"sha256-{target.rsplit('-', 1)[-1]}\n", "")
+        raise AssertionError(f"unexpected binary: {argv}")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    return calls
+
+
+def test_the_temp_lock_sits_beside_the_real_one(tmp_path, monkeypatch):
+    """A `path` patch resolves against dirOf lockFile, so a temp lock in /tmp
+    cannot find it."""
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    pins = {"a": {"patches": [{"kind": "path", "path": "p.patch"}]}}
+    patchhash.compute(tmp_path, pins, ["a"])
+    built = next(c for c in calls if c[0] == "nix-build")
+    expr = built[built.index("-E") + 1]
+    # Emitted as a Nix path via `/. + "rel"`, so the leading slash is gone.
+    assert str(tmp_path / ".pnix").lstrip("/") in expr
+
+
+def test_a_stale_hash_is_stripped_before_building(tmp_path, monkeypatch):
+    """Leaving it in makes the build validate against the very value being
+    recomputed, so it fails instead of answering."""
+    seen = {}
+
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "nix-build":
+            expr = argv[argv.index("-E") + 1]
+            rel = re.search(r'lockFile = \(/\. \+ "([^"]+)"\)', expr).group(1)
+            lock_path = Path("/") / rel
+            seen["doc"] = json.loads(lock_path.read_text())
+            return subprocess.CompletedProcess(argv, 0, "/nix/store/fake-0\n", "")
+        return subprocess.CompletedProcess(argv, 0, "sha256-HASH\n", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    (tmp_path / ".pnix").mkdir()
+    pins = {"a": {"patches": [{"hash": "H"}], "patchedHash": "sha256-STALE"}}
+    patchhash.compute(tmp_path, pins, ["a"])
+    assert "patchedHash" not in seen["doc"]["pins"]["a"]
+
+
+def test_the_temp_lock_is_removed_afterwards(tmp_path, monkeypatch):
+    _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"])
+    assert list((tmp_path / ".pnix").glob("*pnix-tmp*")) == []
+
+
+def test_no_experimental_features_are_enabled(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"])
+    assert calls
+    for call in calls:
+        assert "experimental-features" in call
+        assert call[call.index("experimental-features") + 1] == ""
+
+
+def test_a_failed_build_names_the_pin(tmp_path, monkeypatch):
+    def fake_run(argv, *a, **kw):
+        return subprocess.CompletedProcess(argv, 1, "", "patch does not apply")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    (tmp_path / ".pnix").mkdir()
+    with pytest.raises(patchhash.PatchHashError) as e:
+        patchhash.compute(tmp_path, {"finit": {"patches": [{"hash": "H"}]}},
+                          ["finit"])
+    assert "finit" in str(e.value)
+    assert "does not apply" in str(e.value)
+
+
+def test_a_path_count_mismatch_refuses_to_guess(tmp_path, monkeypatch):
+    _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    pins = {"a": {"patches": [{"hash": "H"}]}, "b": {"patches": [{"hash": "H"}]}}
+    with pytest.raises(patchhash.PatchHashError) as e:
+        patchhash.compute(tmp_path, pins, ["a", "b"])
+    assert "refusing to guess" in str(e.value)
+
+
+def test_names_map_to_hashes_in_the_order_they_were_asked_for(tmp_path,
+                                                              monkeypatch):
+    _capture(monkeypatch, paths=2)
+    (tmp_path / ".pnix").mkdir()
+    pins = {"b": {"patches": [{"hash": "H"}]},
+            "a": {"patches": [{"hash": "H"}]}}
+    out = patchhash.compute(tmp_path, pins, ["b", "a"])
+    # nix-build prints one path per line in the order the expression asked for,
+    # so the first path belongs to "b". A reversed zip gives each pin the other's
+    # hash, which ships as a mismatch on every consumer.
+    assert out == {"b": "sha256-0", "a": "sha256-1"}
+
+
+def test_nothing_to_do_runs_no_command(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    assert patchhash.compute(tmp_path, {}, []) == {}
+    assert calls == []
+
+
+def test_the_lock_is_passed_as_a_nix_path_not_a_string(tmp_path, monkeypatch):
+    """A local patch is `dirOf lockFile + path`. If lockFile is a Nix string,
+    that stays a string, so nothing copies the patch into the store and the
+    sandboxed builder cannot read it. A path value is copied."""
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"])
+    built = next(c for c in calls if c[0] == "nix-build")
+    expr = built[built.index("-E") + 1]
+    assert 'lockFile = "' not in expr
+    assert 'lockFile = (/. + "' in expr
+
+
+def test_hashing_uses_the_stable_cli(tmp_path, monkeypatch):
+    """`nix hash path` needs the nix-command experimental feature, which
+    NO_EXPERIMENTAL switches off -- so it fails on every real invocation while
+    every stubbed one passes."""
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"])
+    hashing = [c for c in calls if c[0] != "nix-build"]
+    assert hashing, "nothing hashed the built tree"
+    for call in hashing:
+        assert call[0] == "nix-hash"
+
+
+def _expr_of(calls):
+    built = next(c for c in calls if c[0] == "nix-build")
+    return built[built.index("-E") + 1]
+
+
+def test_the_environment_cannot_reach_the_lock_time_build(tmp_path, monkeypatch):
+    """PNIX_OVERRIDE would otherwise replace the tree the hash is taken from,
+    writing an override's hash into a committed lock that no later `pnix update`
+    repairs."""
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"])
+    assert "overrideVar = null;" in _expr_of(calls)
+
+
+def test_the_nixpkgs_pin_can_be_named(tmp_path, monkeypatch):
+    """A project that renamed its nixpkgs pin cannot pass `nixpkgsPin` here --
+    that is an eval-time argument -- so `update` has to be told."""
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"],
+                      nixpkgs_pin="nixpkgsUnstable")
+    assert 'nixpkgsPin = "nixpkgsUnstable";' in _expr_of(calls)
+
+
+def test_the_build_asks_for_the_patched_derivations(tmp_path, monkeypatch):
+    """Without patchedOnly the expression yields sourceInfo attrsets, which
+    nix-build cannot realise."""
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"])
+    assert "patchedOnly = true;" in _expr_of(calls)
+
+
+def test_the_build_uses_pnix_s_own_resolver(tmp_path, monkeypatch):
+    """Not the project's vendored .pnix/eval, which may predate this pnix."""
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"])
+    expr = _expr_of(calls)
+    # Spelled literally rather than via patchhash.RESOLVER, which would move
+    # with the bug and assert nothing.
+    own = Path(patchhash.__file__).resolve().parent
+    assert f"{str(own).lstrip('/')}/resolver/eval/resolve.nix" in expr
+    assert str(tmp_path / ".pnix").lstrip("/") + "/eval" not in expr
+
+
+def test_the_tree_is_hashed_recursively_not_flat(tmp_path, monkeypatch):
+    """A patched pin is a directory; --flat would hash the wrong thing and the
+    recorded value would never match what Nix produces."""
+    calls = _capture(monkeypatch, paths=1)
+    (tmp_path / ".pnix").mkdir()
+    patchhash.compute(tmp_path, {"a": {"patches": [{"hash": "H"}]}}, ["a"])
+    hashing = next(c for c in calls if c[0] == "nix-hash")
+    assert "--flat" not in hashing
+
+
+def test_the_temp_lock_carries_every_pin_not_only_the_named_ones(tmp_path,
+                                                                monkeypatch):
+    """`patchPkgs` comes from the nixpkgs pin, which is rarely the pin being
+    hashed."""
+    seen = {}
+
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "nix-build":
+            expr = argv[argv.index("-E") + 1]
+            rel = re.search(r'lockFile = \(/\. \+ "([^"]+)"\)', expr).group(1)
+            seen["doc"] = json.loads((Path("/") / rel).read_text())
+            return subprocess.CompletedProcess(argv, 0, "/nix/store/f-0\n", "")
+        return subprocess.CompletedProcess(argv, 0, "sha256-HASH\n", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    (tmp_path / ".pnix").mkdir()
+    pins = {"a": {"patches": [{"hash": "H"}]}, "nixpkgs": {"rev": "b" * 40}}
+    patchhash.compute(tmp_path, pins, ["a"])
+    assert set(seen["doc"]["pins"]) == {"a", "nixpkgs"}
+
+
+FAILING_LOG = "\n".join(
+    [f"filler line {i}" for i in range(40)]
+    + ["building '/nix/store/aaaa-b-patched.drv'...",
+       "Running phase: patchPhase",
+       "applying patch /nix/store/bbbb-fix.patch",
+       "1 out of 2 hunks FAILED -- saving rejects",
+       "error: builder for '/nix/store/aaaa-b-patched.drv' failed"]
+)
+
+
+def test_a_failure_names_the_pin_that_failed_not_every_pin_recomputed(
+        tmp_path, monkeypatch):
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "nix-build":
+            return subprocess.CompletedProcess(argv, 1, "", FAILING_LOG)
+        return subprocess.CompletedProcess(argv, 0, "sha256-HASH\n", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    (tmp_path / ".pnix").mkdir()
+    pins = {n: {"patches": [{"hash": "H"}]} for n in ("a", "b", "c")}
+    with pytest.raises(patchhash.PatchHashError) as e:
+        patchhash.compute(tmp_path, pins, ["a", "b", "c"])
+    msg = str(e.value)
+    assert msg.startswith("b:"), msg
+    assert "a, b, c" not in msg
+
+
+def test_a_failure_says_how_to_make_progress(tmp_path, monkeypatch):
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "nix-build":
+            return subprocess.CompletedProcess(argv, 1, "", FAILING_LOG)
+        return subprocess.CompletedProcess(argv, 0, "sha256-HASH\n", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    (tmp_path / ".pnix").mkdir()
+    with pytest.raises(patchhash.PatchHashError) as e:
+        patchhash.compute(tmp_path, {"b": {"patches": [{"hash": "H"}]}}, ["b"])
+    assert "--exclude b" in str(e.value)
+
+
+def test_a_failure_shows_the_tail_of_the_log_not_all_of_it(tmp_path,
+                                                           monkeypatch):
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "nix-build":
+            return subprocess.CompletedProcess(argv, 1, "", FAILING_LOG)
+        return subprocess.CompletedProcess(argv, 0, "sha256-HASH\n", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    (tmp_path / ".pnix").mkdir()
+    with pytest.raises(patchhash.PatchHashError) as e:
+        patchhash.compute(tmp_path, {"b": {"patches": [{"hash": "H"}]}}, ["b"])
+    msg = str(e.value)
+    assert "hunks FAILED" in msg
+    assert "filler line 0" not in msg
+
+
+def test_a_failure_pnix_cannot_attribute_still_names_the_candidates(
+        tmp_path, monkeypatch):
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "nix-build":
+            return subprocess.CompletedProcess(argv, 1, "", "error: out of disk")
+        return subprocess.CompletedProcess(argv, 0, "sha256-HASH\n", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    (tmp_path / ".pnix").mkdir()
+    pins = {n: {"patches": [{"hash": "H"}]} for n in ("a", "b")}
+    with pytest.raises(patchhash.PatchHashError) as e:
+        patchhash.compute(tmp_path, pins, ["a", "b"])
+    assert "a, b" in str(e.value)
+
+
+def test_a_missing_nixpkgs_pin_is_advised_with_the_right_flag(tmp_path,
+                                                             monkeypatch):
+    """"Fix the patch" is the wrong remedy when the patch was never reached."""
+    log = ("error: pnix: a pin declares patches, which need a nixpkgs to apply "
+           "them, but there is no pin called 'nixpkgs'. Pass `nixpkgsPin` to "
+           "name it.")
+
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "nix-build":
+            return subprocess.CompletedProcess(argv, 1, "", log)
+        return subprocess.CompletedProcess(argv, 0, "sha256-HASH\n", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    (tmp_path / ".pnix").mkdir()
+    with pytest.raises(patchhash.PatchHashError) as e:
+        patchhash.compute(tmp_path, {"b": {"patches": [{"hash": "H"}]}}, ["b"])
+    msg = str(e.value)
+    assert "--nixpkgs-pin" in msg
+    assert "Fix the patch" not in msg

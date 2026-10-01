@@ -141,3 +141,19 @@ def test_the_writer_is_not_mistaken_for_a_pin(tmp_path):
     path = tmp_path / "pins.lock.json"
     lock.write(path, {"a": {"rev": "1" * 40}})
     assert set(lock.read(path)) == {"a"}
+
+
+def test_schema_4_migrates_forward_without_losing_a_field():
+    pins = {"foo": {"rev": "a" * 40, "patches": [{"kind": "pr", "url": "u",
+                                                  "hash": "sha256-AAA"}]}}
+    out = lock.migrate(pins, 4)
+    assert out == pins
+    assert lock.SCHEMA == 5
+
+
+def test_a_schema_4_lock_is_carried_forward_not_discarded(tmp_path):
+    p = tmp_path / "pins.lock.json"
+    p.write_text(json.dumps({"schema": 4, "pins": {"foo": {"rev": "a" * 40}}}))
+    pins, came_from = lock.read_at(p)
+    assert came_from == 4
+    assert pins["foo"]["rev"] == "a" * 40

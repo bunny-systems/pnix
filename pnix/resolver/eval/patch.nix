@@ -26,6 +26,12 @@
 {
   patchPkgs,
   fetchPatch,
+  # May be null: `builtins.currentSystem` does not exist under pure evaluation.
+  # Only the no-`patchedHash` branch below cares, because only there does
+  # `system` reach the output path. Checked per pin rather than in `patchPkgs`,
+  # which is one shared value for every patched pin -- a throw there fires for a
+  # pin that has a hash because some unrelated pin does not.
+  system,
 }:
 {
   name,
@@ -34,8 +40,9 @@
 }:
 let
   patches = node.patches or [ ];
+  hash = node.patchedHash or null;
 
-  applied = patchPkgs.applyPatches {
+  args = {
     name = "${name}-patched";
     inherit src;
     patches = map fetchPatch patches;
@@ -55,12 +62,53 @@ let
     # `-F0` forbids fuzz while still allowing a hunk to land at a different line
     # number, which is ordinary and safe. `--no-backup-if-mismatch` keeps a
     # failed apply from leaving debris in a tree that is about to be built.
+    # Under a fixed-output derivation it does more than that: an inexact apply
+    # would silently redefine the tree the recorded hash is meant to name.
     patchFlags = [
       "-p1"
       "-F0"
       "--no-backup-if-mismatch"
     ];
   };
+
+  # Content-addressed: the path is a function of (name, hash, mode) alone, so
+  # neither `system` nor the nixpkgs supplying `patch` reaches it. Sound only
+  # because `applyPatches` compiles nothing -- its phases are
+  # `unpackPhase patchPhase installPhase` and its builder is stdenvNoCC, so the
+  # output is a source tree, byte-identical on every platform. Measured on
+  # x86_64-linux and i686-linux: different toolchains, one hash.
+  #
+  # `allowSubstitutes` has to go through `overrideAttrs`. `applyPatches` is built with
+  # nixpkgs' `extendMkDerivation`, whose own arguments win over the caller's, so
+  # passing it in `args` is silently dropped -- measured, it still lands as
+  # false. And a fixed-output derivation does honour it (also measured, nix
+  # 2.34.8), contrary to the folklore that they are always substitutable, so
+  # this flip is what lets one machine's build serve the rest from a cache.
+  fixed =
+    (patchPkgs.applyPatches (
+      args
+      // {
+        outputHash = hash;
+        outputHashAlgo = "sha256";
+        outputHashMode = "recursive";
+      }
+    )).overrideAttrs
+      (_: {
+        allowSubstitutes = true;
+      });
+
+  # No hash in the lock: today's derivation, whose path moves whenever the
+  # nixpkgs applying the patch moves. Traced rather than thrown, so a lock
+  # migrated from schema 4 keeps evaluating until the next `pnix update`.
+  legacy =
+    if system == null then
+      throw "pnix: '${name}' is patched and its lock has no patchedHash, so applying it needs a system to build for -- and this evaluation is pure, so it has none. Run `pnix update` to record a patchedHash, or pass `system`, e.g. `import ./.pnix { system = \"x86_64-linux\"; }`."
+    else
+      builtins.trace "pnix: '${name}' is patched but its lock has no patchedHash, so its store path depends on which nixpkgs applied the patch. Re-run `pnix update`." (
+        patchPkgs.applyPatches args
+      );
+
+  applied = if hash == null then legacy else fixed;
 in
 if patches == [ ] then
   {

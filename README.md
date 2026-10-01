@@ -111,6 +111,9 @@ reported.
 | `--workers N` | `update`, `look` | how many pins to resolve at once; default 8 |
 | `--refresh` | `update`, `look` | ignore cached ref lookups; they expire after 60 minutes |
 | `--exit-code` | `look` | exit 1 when anything has drifted, for CI |
+| `--nixpkgs-pin NAME` | `update` | which pin supplies the nixpkgs that applies patches, when it is not called `nixpkgs` |
+| `--repatch [NAME…]` | `update` | re-resolve patch nodes, adopting a tracked PR's new commits; all patched pins when none are named |
+| `--verify-patches` | `update` | rebuild every patched pin's tree and re-check its hash, even when only the nixpkgs applying it moved |
 | `names…` | `update` | update only these pins; the rest keep their locked entry |
 
 `update` reports each pin on stderr as it lands, and announces a download
@@ -622,23 +625,57 @@ blaming `importable` for that cost** — if anything in your config already does
 `disabledModules` exist.
 
 Patches need a nixpkgs to apply them; pnix uses the pin named `nixpkgs`. Rename
-with `import ./.pnix { nixpkgsPin = "nixpkgs-stable"; }`.
+with `import ./.pnix { nixpkgsPin = "nixpkgs-stable"; }` — and pass the same name
+to `pnix update --nixpkgs-pin nixpkgs-stable`, because `update` builds the patched
+tree too and cannot read an eval-time argument.
+
+**The patched tree's store path comes from the lock, not from the build.**
+`pnix update` builds the patched tree once to learn its hash and records it as
+`patchedHash`, which makes the application a fixed-output derivation. That
+decouples a patched pin from the nixpkgs that applies its diff: bumping nixpkgs
+no longer moves the patched path, so nothing downstream of the pin rebuilds and
+an `importable` pin does not stall on a fresh IFD after every update. It also
+means two machines given the same lock land on the same path, which is a
+guarantee and not a convention. The cost is that `pnix update` builds: about 46
+seconds for a nixpkgs-sized tree, each time a patched pin actually moves.
 
 ### A patched pin needs a `system`
 
-Applying a patch is a derivation, and a derivation needs a system. Under
-`nix-build`, `nix-instantiate` or `nixos-rebuild --file` pnix reads
-`builtins.currentSystem`. **Pure evaluation — every `nix build .#…` of a flake
-— has no such builtin**, so name it:
+Applying a patch is a derivation, and a derivation needs a system to be
+**built**. It no longer decides the **result**: with a `patchedHash` in the lock
+the output is content-addressed, so `system` only determines which platform can
+build the tree, never which tree you get. Under `nix-build`, `nix-instantiate` or
+`nixos-rebuild --file` pnix reads `builtins.currentSystem`; under pure
+evaluation — every `nix build .#…` of a flake — there is no such builtin, and
+pnix falls back to `x86_64-linux`. On another architecture, say so:
 
 ```nix
-sources = import ./.pnix { system = "x86_64-linux"; };
+sources = import ./.pnix { system = "aarch64-linux"; };
 ```
 
-A literal, not `builtins.currentSystem or "x86_64-linux"`. If a repo has both a
-`default.nix` and a `flake.nix` they must name the *same* system, or the two
-entry points disagree on the patched store path and on every derivation below
-it. Nothing else in pnix consults `system`, and an unpatched pin never needs it.
+Two entry points that name different systems is no longer a hazard, because
+neither one can change the patched path. A `default.nix` and a `flake.nix` may
+disagree freely.
+
+**Without a `patchedHash`, the old rule still applies**, because then `system`
+is back in the store path. That is the state a lock written by an older pnix is
+in, and pure evaluation of such a pin is refused outright rather than allowed to
+diverge. `pnix update` is the fix; a `trace` says so.
+
+### Two kinds of hash mismatch
+
+Patching can fail on a hash in two different ways, and Nix prints its own
+message for each, so pnix cannot reword them:
+
+- **On a `.diff`** — the patch *file* does not hash to what the lock recorded,
+  which means a mutable diff URL served different bytes. `pnix update` does not
+  fix it; the forge changed under a URL that should have been immutable.
+- **On a `…-patched` path** — the patched *tree* built differently from what the
+  lock recorded. Reach for **`pnix update --verify-patches`**, not a plain
+  `pnix update`: plain `update` only recomputes a hash when the pin's rev or its
+  patch set moved, and the cases that produce this mismatch are exactly the ones
+  where neither did. Run it before pushing a lock to other machines, which is
+  what it is for.
 
 ---
 
@@ -761,14 +798,21 @@ foo: 1a2b3c4d -> 5e6f7a8b                       a pin moved
 bar: not locked yet                             declared, never updated
 baz: locked but no longer declared              gone from the tree
 finit: PR #181 is merged upstream; bump the pin's rev and drop the patch
-finit: PR #181 has new commits since you locked (fa14ed16 -> 9c3b2a10)
+finit: PR #181 has new commits since you locked (fa14ed16 -> 9c3b2a10) -- `pnix update --repatch finit` to adopt them
 finit: PR #181 was rebased onto a new base (64e41e06 -> 7d18036f)
 all pins current
 ```
 
 It resolves refs but never downloads, so it is one `git ls-remote` per pin plus
 one request per tracked PR. Merged-PR advice is read straight from the lock and
-needs no network at all.
+needs no network at all. `look` never builds, so it never fills in a missing
+`patchedHash`.
+
+A tracked PR gaining commits is the one kind of upstream movement a plain `pnix
+update` ignores, because the declaration `{ pr = 181; }` has not changed. That is
+deliberate — a PR branch gets force-pushed, and an `update` run to bump something
+else should not quietly start building different third-party code — so the drift
+line names `--repatch`, which is how you take it.
 
 ---
 
@@ -855,6 +899,12 @@ what flakes already do, minus the experimental feature.
 out under the EUPL or one of its [compatible
 licences](https://joinup.ec.europa.eu/collection/eupl) (GPL-2.0/3.0, AGPL-3.0,
 MPL-2.0, LGPL, CeCILL, LiLiQ-R, EUPL-1.1). Article 5.
+
+**A lock schema bump needs both commands.** The vendored resolver compares the
+schema for equality, so `pnix update` alone leaves a lock the resolver refuses,
+and `pnix init` alone leaves a resolver the lock refuses. Run `pnix update && pnix
+init` and commit the lock and `.pnix/` together; `update` says so when it
+migrates.
 
 **This reaches further than usual, because `pnix init` vendors.** It copies
 `.pnix/` — around 570 lines — into your repository, which is redistribution. So

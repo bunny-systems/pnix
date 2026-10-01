@@ -21,6 +21,8 @@ touches.
 Measured on finit #181: 17374 bytes against 18526.
 """
 
+import base64
+import hashlib
 import os
 from pathlib import Path
 
@@ -112,6 +114,31 @@ def _relative(path: str, project: Path, name: str) -> str:
     return Path(os.path.relpath(p, _lock_dir(root))).as_posix()
 
 
+def _flat_hash(path: Path) -> str:
+    """The SRI flat hash of one file, the shape the lock stores everywhere."""
+    digest = hashlib.sha256(path.read_bytes()).digest()
+    return "sha256-" + base64.b64encode(digest).decode()
+
+
+def local_patch_drifted(node: dict, project: Path) -> bool:
+    """True when a recorded local patch file no longer hashes to what it did.
+
+    The lock cannot pin a file in the consumer's own tree the way it pins a
+    download, so this is the check that stands in for it. A node written before
+    local patches carried a hash has nothing to compare and is left alone; a
+    file that has gone missing counts as drift, so the run re-resolves and
+    reports it rather than silently trusting a hash for a patch that is no
+    longer there.
+    """
+    for patch in node.get("patches", []):
+        if patch.get("kind") != "path" or "hash" not in patch:
+            continue
+        local = (_lock_dir(project) / patch["path"]).resolve()
+        if not local.is_file() or _flat_hash(local) != patch["hash"]:
+            return True
+    return False
+
+
 def _lock_dir(project: Path) -> Path:
     """Where the lock lives, which is what a recorded patch path is relative to."""
     from pnix import cli
@@ -125,9 +152,18 @@ def resolve_one(entry, spec: dict, name: str, project: Path) -> dict:
         rel = _relative(entry, project, name)
         # resolve() first: pathlib does not normalise a ".." segment, so the
         # check would fail on a lock directory that does not exist yet.
-        if not (_lock_dir(project) / rel).resolve().is_file():
+        local = (_lock_dir(project) / rel).resolve()
+        if not local.is_file():
             raise PatchError(f"pin '{name}': no such patch file: {rel}")
-        return {"kind": "path", "path": rel}
+        # The file's own hash, so that editing it is *evidence* and not
+        # something only a rebuild could notice. A remote patch is pinned by the
+        # hash of what was downloaded; a local one had nothing, which meant an
+        # edited patch kept the recorded `patchedHash` through every `pnix
+        # update` -- and on the machine that wrote it the patched tree already
+        # existed, so Nix served the pre-edit tree with no error at all.
+        #
+        # Flat, like the remote case: this is a file, not a tree.
+        return {"kind": "path", "path": rel, "hash": _flat_hash(local)}
 
     if not isinstance(entry, dict):
         raise PatchError(
@@ -240,11 +276,17 @@ def _node_source(node: dict) -> tuple[str, str, str]:
     return host or "github.com", owner, repo
 
 
-def drift(node: dict) -> list[str]:
+def drift(node: dict, name: str) -> list[str]:
     """What changed upstream since this patch was locked. One request per PR.
 
     The part nothing else has, and nearly free: `head` and `base` were stored at
     lock time precisely so this needs no diff and no clone.
+
+    `name` is the pin's, so the new-commits line can name the command that acts
+    on it. Reporting drift with no stated way to adopt it is how the only kind of
+    upstream movement `update` ignores stayed invisible: a patch declaration does
+    not change when the branch it tracks does, so nothing short of `--repatch`
+    brings it in.
     """
     out: list[str] = []
     for patch in node.get("patches", []):
@@ -270,7 +312,8 @@ def drift(node: dict) -> list[str]:
         if pull.head != patch["head"]:
             out.append(
                 f"{label} has new commits since you locked "
-                f"({patch['head'][:8]} -> {pull.head[:8]})"
+                f"({patch['head'][:8]} -> {pull.head[:8]}) "
+                f"-- `pnix update --repatch {name}` to adopt them"
             )
         if pull.base != patch["base"]:
             out.append(f"{label} was rebased onto a new base "
