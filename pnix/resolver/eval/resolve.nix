@@ -15,6 +15,11 @@
 
   # name -> path or evaluated value, replacing whatever the lock says. The
   # programmatic form; PNIX_OVERRIDE is layered on top of it below.
+  #
+  # This one substitutes a pin's *source*: declared patches are still applied
+  # to whatever it supplies, since a parent composing a child's pins is not
+  # claiming to know which patches the child needs. The environment layer is
+  # the one that replaces the resolved input outright -- see `patchedSources`.
   overrides ? { },
 
   # Set to null to ignore the environment entirely -- useful in tests, and for
@@ -138,6 +143,13 @@ let
     applyTo {
       inherit name src;
       node = pins.${name};
+      # Deliberately the environment layer only, not `allOverrides`. The two
+      # mean different things: the `overrides` argument substitutes where a
+      # pin's *source* comes from, which is how a parent project composes a
+      # child's pins (and how the test harness stands in for the fetchers), so
+      # the child's declared patches still belong on it. `PNIX_OVERRIDE`
+      # replaces the input itself for one impure run.
+      overridden = envOverrides ? ${name};
     }
   ) rawSources;
 
@@ -312,7 +324,13 @@ let
       extra = builtins.removeAttrs (if builtins.isAttrs fetched.${name} then fetched.${name} else { }) [
         "outPath"
       ];
-      sourceInfo = sourceInfoFrom src (node // extra);
+      # `patchedHash` names the patched tree, so it is only this pin's narHash
+      # when there *is* one. An overridden pin skips its patches, and would
+      # otherwise report the locked hash of a tree that was never built -- and
+      # report it over an attrset override's own narHash, which `extra` carries.
+      sourceInfo = sourceInfoFrom src (
+        (if patch.patched then node else builtins.removeAttrs node [ "patchedHash" ]) // extra
+      );
       dir = flakeDirOf src node;
 
       # A patched source is an unbuilt derivation. Probing it for a flake.nix

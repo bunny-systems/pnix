@@ -37,6 +37,11 @@
   name,
   src,
   node,
+
+  # Whether `resolve.nix` replaced this pin's source with an override. Patches
+  # are then skipped; see the terminal below for why that is the only coherent
+  # option.
+  overridden ? false,
 }:
 let
   patches = node.patches or [ ];
@@ -109,12 +114,33 @@ let
       );
 
   applied = if hash == null then legacy else fixed;
-in
-if patches == [ ] then
-  {
+
+  # `src` as handed in: a path, not a derivation, so nothing has to be built and
+  # probing it for a flake.nix is free.
+  verbatim = {
     outPath = src;
     patched = false;
-  }
+  };
+in
+if patches == [ ] then
+  verbatim
+
+# An override replaces the *resolved input*, not just the fetch that feeds the
+# patches. Applying them on top would assert the lock's `patchedHash` against a
+# tree the lock never described -- a guaranteed `hash mismatch in fixed-output
+# derivation` -- and the right hash cannot be found here, because learning it
+# means building the tree during evaluation, which is the import-from-derivation
+# the recorded hash exists to avoid. So the choice is to claim no hash or to
+# fail, and `override.nix` already says what an override is: transient, never
+# recorded.
+#
+# Skipping the patches rather than applying them input-addressed is the second
+# half of that. The usual reason to override a patched pin is a checkout that
+# already carries the change -- a PR branch, or the work the patch represents --
+# where re-applying the diff fails outright under `-F0`. Traced, because a
+# declared patch quietly not applying is worth a line.
+else if overridden then
+  builtins.trace "pnix: '${name}' is overridden, so its ${toString (builtins.length patches)} declared patch${if builtins.length patches == 1 then "" else "es"} ${if builtins.length patches == 1 then "is" else "are"} not applied" verbatim
 else
   {
     outPath = applied;

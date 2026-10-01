@@ -62,6 +62,25 @@ let
       }
     ];
   };
+  # Both halves of the override case: the pin carries patches *and* a recorded
+  # hash, which is the combination that used to produce a guaranteed
+  # `hash mismatch in fixed-output derivation`.
+  overridden = apply {
+    name = "o";
+    src = "/my/checkout";
+    overridden = true;
+    node = {
+      patches = [
+        {
+          kind = "pr";
+          url = "u";
+          hash = "H";
+        }
+      ];
+      patchedHash = "sha256-XVVwVmNhl3JAxgVm4sm8IBGsvgRcmHTkxBWDE+t7CWc=";
+    };
+  };
+
   importable = apply {
     name = "c";
     src = "/fake/src";
@@ -170,6 +189,47 @@ in
   }
   # One `patchPkgs` serves every patched pin, so a `system` check placed there
   # would refuse a pin that has a hash because some other pin does not.
+  # An override replaces the resolved input, so its patches are skipped: the
+  # recorded hash describes a tree that was never built, and recomputing it
+  # here would mean building during evaluation.
+  {
+    name = "an overridden pin is handed back as its own tree";
+    expr = overridden.outPath;
+    expected = "/my/checkout";
+  }
+  {
+    name = "an overridden pin claims no fixed-output hash";
+    # The discriminating form. `?` cannot ask this of a path, and that is the
+    # point: with the patches applied, `outPath` would be a derivation carrying
+    # `outputHash` from the lock.
+    expr = builtins.isString overridden.outPath;
+    expected = true;
+  }
+  {
+    name = "and it is not marked patched, so it may be probed for a flake";
+    expr = overridden.patched;
+    expected = false;
+  }
+  {
+    name = "overriding a pin that declares no patches changes nothing";
+    expr =
+      (apply {
+        name = "p";
+        src = "/my/checkout";
+        overridden = true;
+        node = { };
+      }).outPath;
+    expected = "/my/checkout";
+  }
+  {
+    name = "a pin that is not overridden still gets the fixed-output branch";
+    # `overridden` defaults to false, so forgetting to pass it must not quietly
+    # disable patching for every pin. `isAttrs` first so a flipped default
+    # fails the case rather than erroring on a selection from a path, which
+    # reads as a broken test file instead of a broken implementation.
+    expr = builtins.isAttrs fod.outPath && fod.outPath._isDrv;
+    expected = true;
+  }
   {
     name = "with no system, a hashed pin still resolves";
     expr =

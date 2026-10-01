@@ -14,7 +14,14 @@ ROOT = Path(__file__).resolve().parent.parent
 NO_EXPERIMENTAL = ["--option", "experimental-features", ""]
 
 LOCK = ROOT / "tests" / "nix" / "fixtures" / "locks" / "demo.lock.json"
+PATCHED_LOCK = (ROOT / "tests" / "nix" / "fixtures" / "locks"
+                / "patched-hashed.lock.json")
 FLAKES = ROOT / "tests" / "nix" / "fixtures" / "flakes"
+
+# The `patched` pin of that fixture, which carries both a patch and a recorded
+# patchedHash. Reading it back is how these tests tell which branch ran.
+PATCHED_HASH = "sha256-XVVwVmNhl3JAxgVm4sm8IBGsvgRcmHTkxBWDE+t7CWc="
+FETCH_HASH = "sha256-FFF"
 
 def _expr(attrpath: str) -> str:
     """`inputs.${attr}` will not do: an interpolated string is one attribute
@@ -34,7 +41,33 @@ def _expr(attrpath: str) -> str:
     """)
 
 
-def _eval(attr: str, env_value: str | None, extra: dict | None = None):
+def _patched_expr(attrpath: str) -> str:
+    """The patched fixture instead of the demo one.
+
+    `patched` is also listed in the `overrides` argument, which is what the
+    Nix-level harness uses to stand in for the fetchers. That is deliberate
+    here: it makes the declarative hook and the environment layer visible side
+    by side, since only the latter skips the declared patches.
+    """
+    # An attrpath that already names `inputs` is passed through whole, so a
+    # case can wrap the result in a builtin instead of only selecting from it.
+    body = attrpath if "inputs." in attrpath else f"inputs.{attrpath}"
+    return textwrap.dedent(f"""
+        let
+          inputs = import {ROOT}/pnix/resolver/eval/resolve.nix {{
+            lockFile = {PATCHED_LOCK};
+            system = null;
+            overrides = {{
+              nixpkgs = {FLAKES}/fakepkgs;
+              patched = {FLAKES}/simple;
+            }};
+          }};
+        in {body}
+    """)
+
+
+def _eval(attr: str, env_value: str | None, extra: dict | None = None,
+          expr=_expr):
     """Evaluate the expression directly rather than through a scratch file.
 
     This used to write `tests/_override_expr.nix` and remove it in a `finally`,
@@ -53,7 +86,7 @@ def _eval(attr: str, env_value: str | None, extra: dict | None = None):
         env["PNIX_OVERRIDE"] = env_value
     return subprocess.run(
         ["nix-instantiate", "--eval", "--strict", "--json",
-         "--expr", _expr(attr), *NO_EXPERIMENTAL],
+         "--expr", expr(attr), *NO_EXPERIMENTAL],
         capture_output=True, text=True, check=False, env=env,
     )
 
@@ -177,3 +210,69 @@ def test_a_url_and_a_path_reach_the_same_tree(local_repo, local_repo_head):
     by_url = _eval("dep.outPath", f"dep=file://{local_repo}#{local_repo_head}")
     assert by_url.returncode == 0, by_url.stderr
     assert by_url.stdout.strip().strip('"').startswith("/nix/store/")
+
+
+# --- overriding a patched pin ----------------------------------------------
+#
+# A pin that is both patched and overridden is the one combination where the
+# recorded `patchedHash` describes a tree nothing will build: the FOD would
+# assert the locked hash against the override's content and fail every time.
+# The hash cannot be recomputed during evaluation either -- that is the
+# import-from-derivation it exists to avoid -- so the patches are skipped and no
+# hash is claimed. None of this is reachable from a stubbed test: the branch is
+# chosen from `builtins.getEnv`, so only a real process with a real environment
+# exercises it.
+
+def test_a_declarative_override_still_applies_the_patches():
+    """The `overrides` argument substitutes where a source comes from; it does
+    not claim the pin needs no patches. `patched` is overridden that way here,
+    and reporting the patchedHash as narHash is what proves the patched tree is
+    still what the pin resolves to."""
+    proc = _eval("patched.narHash", None, expr=_patched_expr)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == PATCHED_HASH
+
+
+def test_an_environment_override_skips_the_declared_patches():
+    proc = _eval("patched.narHash", f"patched={FLAKES}/mono/sub",
+                 expr=_patched_expr)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) != PATCHED_HASH
+    # Falls through to the unpatched fetch's hash, which is the pin's own
+    # provenance rather than a hash of a tree that was never built.
+    assert json.loads(proc.stdout) == FETCH_HASH
+
+
+def test_the_overridden_tree_is_used_verbatim():
+    """Not merely 'does not fail': the resolved source has to be the tree named
+    on the command line, with no derivation in between.
+
+    `baseNameOf` rather than the path itself, because serialising a path to
+    JSON prints where it *would* land in the store. The declarative override
+    points at `simple`, so a basename of `sub` can only have come from the
+    environment -- and under the patching branch this errors instead, since
+    the result is a derivation and not a path at all.
+    """
+    proc = _eval("builtins.baseNameOf inputs.patched.outPath",
+                 f"patched={FLAKES}/mono/sub", expr=_patched_expr)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == "sub"
+
+
+def test_the_overridden_tree_is_a_readable_directory():
+    """The property the skip buys: a plain path, so reading it costs no build
+    and probing it for a flake is not an import-from-derivation."""
+    proc = _eval('builtins.pathExists (inputs.patched.outPath + "/flake.nix")',
+                 f"patched={FLAKES}/mono/sub", expr=_patched_expr)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) is True
+
+
+def test_it_says_the_patches_were_not_applied():
+    """A declared patch quietly not applying is exactly the kind of silence
+    that makes an override untrustworthy."""
+    proc = _eval("patched.outPath", f"patched={FLAKES}/mono/sub",
+                 expr=_patched_expr)
+    assert "patched" in proc.stderr
+    assert "not applied" in proc.stderr
+    assert "1 declared patch is" in proc.stderr, proc.stderr
