@@ -9,6 +9,20 @@ def _run(args, cwd):
     subprocess.run(args, cwd=cwd, check=True, capture_output=True)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_state(tmp_path_factory, monkeypatch):
+    """Keep every test out of the real `$XDG_STATE_HOME`.
+
+    `patchhash` keeps a gc-root per patched pin under there, so without this a
+    plain `pytest` run leaves directories in the developer's own
+    `~/.local/state/pnix` -- which it did, 18 of them, before this existed.
+    Autouse rather than opt-in: the next thing that wants user state should be
+    isolated by default and not by remembering.
+    """
+    monkeypatch.setenv("XDG_STATE_HOME",
+                       str(tmp_path_factory.mktemp("state")))
+
+
 # Committer identity is needed for `git tag -a`: an annotated tag is a real
 # object with an author, unlike a lightweight tag.
 _IDENT = ["-c", "user.email=t@e", "-c", "user.name=t"]

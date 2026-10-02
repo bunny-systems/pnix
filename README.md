@@ -662,6 +662,26 @@ is back in the store path. That is the state a lock written by an older pnix is
 in, and pure evaluation of such a pin is refused outright rather than allowed to
 diverge. `pnix update` is the fix; a `trace` says so.
 
+### Patched trees are kept out of the garbage collector
+
+A patched tree is a build *input*, so nothing in a system closure references it
+and `nix-collect-garbage` takes it like any other unused path — after which the
+next evaluation pays the whole `applyPatches` build again. `pnix update` therefore
+keeps one symlink per patched pin:
+
+```
+$XDG_STATE_HOME/pnix/<hash of the project path>/gcroots/<pin>
+```
+
+Outside the project on purpose: a symlink into `/nix/store` inside the repo is
+something `git add -A` picks up, and it would outlive the checkout. The link is
+re-pointed on every `update`, so a moved patch set releases the tree it replaces
+instead of pinning it forever, and a pin that stops being patched loses its link.
+
+A pin whose tree is not in the store yet is skipped rather than built — an
+`update` must not start a nixpkgs-sized build to create a cache entry — so it
+stays unrooted until something builds it and the next `update` picks it up.
+
 ### Two kinds of hash mismatch
 
 Patching can fail on a hash in two different ways, and Nix prints its own

@@ -12,8 +12,11 @@ hash is the one error nothing downstream checks: a fixed-output derivation is
 verified against its hash and never against its inputs.
 """
 
+import hashlib
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 from . import lock
@@ -76,7 +79,7 @@ def _nix_path(path: Path) -> str:
 
 
 def _expression(lock_path: Path, names: list[str],
-                nixpkgs_pin: str) -> str:
+                nixpkgs_pin: str, select: str = "n: r.${n}") -> str:
     """The expression `nix-build` realises. Every eval-time knob is pinned here.
 
     `overrideVar = null` is not optional. Left to its default the resolver reads
@@ -101,8 +104,32 @@ def _expression(lock_path: Path, names: list[str],
         f"patchedOnly = true; "
         f"overrideVar = null; "
         f"nixpkgsPin = {json.dumps(nixpkgs_pin)}; "
-        f"}}; in builtins.map (n: r.${{n}}) [ {wanted} ]"
+        f"}}; in builtins.map ({select}) [ {wanted} ]"
     )
+
+
+def _write_tmp_lock(project: Path, pins: dict[str, dict],
+                    *, strip_hash: bool) -> Path:
+    """The lock the resolver reads for this one call, beside the real one.
+
+    `strip_hash` for a build: the hash being computed must not also be the hash
+    being checked, or `patch.nix` builds a fixed-output derivation that
+    validates against the stale value and fails instead of answering. Keep the
+    hashes for a path lookup, where the fixed-output branch is exactly what
+    makes the store path knowable without building anything.
+    """
+    lock_dir = Path(project) / ".pnix"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    tmp = lock_dir / TMP_NAME
+    entries = {
+        name: ({k: v for k, v in entry.items() if k != "patchedHash"}
+               if strip_hash else entry)
+        for name, entry in pins.items()
+    }
+    tmp.write_text(
+        json.dumps({"schema": lock.SCHEMA, "pins": entries}, indent=2) + "\n"
+    )
+    return tmp
 
 
 def compute(project: Path, pins: dict[str, dict], names: list[str],
@@ -110,20 +137,7 @@ def compute(project: Path, pins: dict[str, dict], names: list[str],
     """Build the named pins' patched trees and hash them. name -> SRI hash."""
     if not names:
         return {}
-    lock_dir = Path(project) / ".pnix"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    tmp = lock_dir / TMP_NAME
-
-    # The hash being computed must not also be the hash being checked. Left in
-    # place, `patch.nix` builds a fixed-output derivation that validates against
-    # the stale value and fails instead of answering.
-    stripped = {
-        name: {k: v for k, v in entry.items() if k != "patchedHash"}
-        for name, entry in pins.items()
-    }
-    tmp.write_text(
-        json.dumps({"schema": lock.SCHEMA, "pins": stripped}, indent=2) + "\n"
-    )
+    tmp = _write_tmp_lock(project, pins, strip_hash=True)
     try:
         proc = subprocess.run(
             ["nix-build", "--no-out-link",
@@ -138,10 +152,14 @@ def compute(project: Path, pins: dict[str, dict], names: list[str],
                 f"{', '.join(names)}: nix-build produced {len(paths)} paths for "
                 f"{len(names)} pins; refusing to guess which is which."
             )
-        return {
-            name: _hash_path(name, path)
-            for name, path in zip(names, paths, strict=True)
-        }
+        built = dict(zip(names, paths, strict=True))
+        # Deliberately *not* rooted here. The temp lock has the hashes stripped,
+        # so this build took the input-addressed branch and these paths are not
+        # the ones the resolver will name once the hash is recorded -- measured:
+        # `ch7d91z…-demo-patched` here against `yd1qisr…-demo-patched` from the
+        # fixed-output branch, same tree, same hash. Rooting happens in
+        # `cli._hash_patches`, after the hashes are final, against `paths()`.
+        return {name: _hash_path(name, path) for name, path in built.items()}
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -213,3 +231,122 @@ def _hash_path(name: str, path: str) -> str:
             f"{name}: could not hash {path}. {proc.stderr.strip()}"
         )
     return proc.stdout.strip()
+
+
+# --- garbage-collection roots ----------------------------------------------
+#
+# A patched tree is a build *input*, so nothing in a system closure references
+# it and `nix-store --delete` takes it without complaint -- verified. On a
+# machine that collects garbage on a timer it is therefore gone by tomorrow, and
+# the next evaluation pays the full `applyPatches` build again (46 s for a
+# nixpkgs-sized tree). A root per patched pin is what makes "built once" true.
+#
+# The link lives outside the project, under $XDG_STATE_HOME, because a symlink
+# into /nix/store inside the repo is something `git add -A` would pick up and
+# `nix-store --add-root` would then keep alive after the project is deleted.
+# tack does the same thing in the same place, which is where this shape is from.
+ROOTS = "gcroots"
+
+
+def _state_dir(project: Path) -> Path:
+    """`$XDG_STATE_HOME/pnix/<key>/gcroots`, keyed by the project's path.
+
+    Hashed rather than spelled out: two checkouts of one config must not share
+    roots, project paths contain characters a directory name should not have to
+    carry, and the key stays a fixed length however deep the checkout is.
+    """
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local/state")
+    key = hashlib.sha256(
+        str(Path(project).resolve()).encode()
+    ).hexdigest()
+    return Path(base) / "pnix" / key / ROOTS
+
+
+def root(project: Path, built: dict[str, str]) -> None:
+    """Keep each named store path alive, under one link per pin.
+
+    Failure is reported and not raised. A missing root costs a rebuild; an
+    update that aborted because it could not write a symlink would cost the
+    user their whole run for a cache miss they did not ask about.
+    """
+    roots = _state_dir(project)
+    try:
+        roots.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"pnix: could not create {roots} ({exc}); patched trees will not "
+              f"survive a garbage collection.", file=sys.stderr)
+        return
+    for name, path in sorted(built.items()):
+        # `--realise` on a path that is not in the store would *build* it, and
+        # an update must never start a 46 s build behind the user's back. A tree
+        # that is already gone gets rooted the next time something builds it.
+        if not Path(path).exists():
+            continue
+        link = roots / name
+        proc = subprocess.run(
+            # `--realise` is how `--add-root` is spelled for a path that already
+            # exists; it registers the link and builds nothing. Not `--indirect`:
+            # on nix 2.34.8 `--add-root` is already indirect, and `--query
+            # --roots` confirms the registration either way.
+            ["nix-store", "--realise", path, "--add-root", str(link),
+             *NO_EXPERIMENTAL],
+            capture_output=True, text=True, check=False,
+        )
+        if proc.returncode != 0:
+            print(f"pnix: {name}: could not root {path} "
+                  f"({proc.stderr.strip()}); it will not survive a garbage "
+                  f"collection.", file=sys.stderr)
+
+
+def prune(project: Path, keep: set[str]) -> None:
+    """Drop roots for pins that are no longer patched.
+
+    Without this a pin that loses its patches keeps its last patched tree alive
+    forever -- the one way this feature could leak store space rather than save
+    rebuild time.
+    """
+    roots = _state_dir(project)
+    if not roots.is_dir():
+        return
+    for link in sorted(roots.iterdir()):
+        if link.name not in keep:
+            link.unlink(missing_ok=True)
+
+
+def paths(project: Path, pins: dict[str, dict], names: list[str],
+          nixpkgs_pin: str = "nixpkgs") -> dict[str, str]:
+    """Each named patched pin's store path, by evaluation alone.
+
+    This exists for the pins `needs_recompute` held back. Their hash is already
+    in the lock, so nothing is built and the path is never learned -- yet on a
+    machine that only ever read the lock, that is precisely the tree with no
+    root. Asking the resolver costs one evaluation (it imports the nixpkgs pin
+    to build `patchPkgs`) and no build, because a recorded hash is what makes a
+    fixed-output path knowable up front.
+    """
+    if not names:
+        return {}
+    tmp = _write_tmp_lock(project, pins, strip_hash=False)
+    try:
+        proc = subprocess.run(
+            ["nix-instantiate", "--eval", "--strict", "--json",
+             "-E", _expression(tmp, names, nixpkgs_pin,
+                               select="n: r.${n}.outPath"),
+             *NO_EXPERIMENTAL],
+            capture_output=True, text=True, check=False,
+        )
+        if proc.returncode != 0:
+            # Not fatal, and deliberately quiet: the lock is already correct and
+            # the only thing lost is a root. Shouting here would turn a cache
+            # concern into noise on every update of a project whose nixpkgs pin
+            # happens to be named something else.
+            return {}
+        try:
+            found = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(found, list) or len(found) != len(names):
+            return {}
+        return dict(zip(names, found, strict=True))
+    finally:
+        tmp.unlink(missing_ok=True)

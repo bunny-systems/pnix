@@ -345,3 +345,191 @@ def test_a_missing_nixpkgs_pin_is_advised_with_the_right_flag(tmp_path,
     msg = str(e.value)
     assert "--nixpkgs-pin" in msg
     assert "Fix the patch" not in msg
+
+
+# --- garbage-collection roots ----------------------------------------------
+#
+# Every test here uses real directories as stand-in store paths, because
+# `root` refuses a path that is not on disk -- that guard is what stops
+# `nix-store --realise` turning an update into a 46 s build. A test using
+# `/nix/store/fake-0` would exercise nothing, which is exactly what the
+# pre-existing `_capture` tests were doing by accident.
+
+def _roots(monkeypatch, tmp_path, fail=False):
+    """Record nix-store invocations; the state dir lands under tmp_path."""
+    calls = []
+
+    def fake_run(argv, *a, **kw):
+        calls.append(argv)
+        if argv[0] == "nix-store":
+            return subprocess.CompletedProcess(
+                argv, 1 if fail else 0, "", "nix-store: nope" if fail else "")
+        raise AssertionError(f"unexpected binary: {argv}")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    return calls
+
+
+def test_the_state_dir_is_under_xdg_state_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "s"))
+    d = patchhash._state_dir(tmp_path / "proj")
+    assert str(d).startswith(str(tmp_path / "s" / "pnix"))
+    assert d.name == patchhash.ROOTS
+
+
+def test_two_checkouts_do_not_share_roots(tmp_path, monkeypatch):
+    """Two clones of one config are two projects; sharing links would let one
+    clone's update unroot the other's tree."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "s"))
+    assert (patchhash._state_dir(tmp_path / "a")
+            != patchhash._state_dir(tmp_path / "b"))
+
+
+def test_the_root_is_outside_the_project(tmp_path, monkeypatch):
+    """A symlink into /nix/store inside the repo is something `git add -A`
+    picks up, and it would outlive the project."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "s"))
+    proj = tmp_path / "proj"
+    assert proj not in patchhash._state_dir(proj).parents
+
+
+def test_rooting_calls_add_root_for_a_path_that_exists(tmp_path, monkeypatch):
+    calls = _roots(monkeypatch, tmp_path)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    patchhash.root(tmp_path / "proj", {"foo": str(tree)})
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:3] == ["nix-store", "--realise", str(tree)]
+    link = argv[argv.index("--add-root") + 1]
+    assert Path(link).name == "foo"
+    assert Path(link).parent.name == patchhash.ROOTS
+
+
+def test_rooting_never_realises_a_path_that_is_gone(tmp_path, monkeypatch):
+    """`--realise` on a missing path builds it. An update that silently started
+    a nixpkgs-sized build would be worse than a lost root."""
+    calls = _roots(monkeypatch, tmp_path)
+    patchhash.root(tmp_path / "proj", {"foo": "/nix/store/definitely-not-here"})
+    assert calls == []
+
+
+def test_a_failed_root_warns_and_does_not_raise(tmp_path, monkeypatch, capsys):
+    """A missing root costs a rebuild; aborting the run costs the whole
+    update."""
+    _roots(monkeypatch, tmp_path, fail=True)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    patchhash.root(tmp_path / "proj", {"foo": str(tree)})
+    err = capsys.readouterr().err
+    assert "foo" in err and "garbage collection" in err
+
+
+def test_pruning_drops_only_the_pins_that_are_no_longer_patched(tmp_path,
+                                                                monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "s"))
+    proj = tmp_path / "proj"
+    roots = patchhash._state_dir(proj)
+    roots.mkdir(parents=True)
+    (roots / "keep").symlink_to(tmp_path)
+    (roots / "drop").symlink_to(tmp_path)
+    patchhash.prune(proj, {"keep"})
+    assert [p.name for p in sorted(roots.iterdir())] == ["keep"]
+
+
+def test_pruning_a_project_with_no_roots_is_quiet(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "s"))
+    patchhash.prune(tmp_path / "never-updated", {"foo"})
+
+
+def test_computing_does_not_root_its_own_build(tmp_path, monkeypatch):
+    """`compute` builds from a lock with the hashes *stripped*, so it takes the
+    input-addressed branch and its output is not the path the resolver will
+    name. Measured on a real project: `ch7d91z...-demo-patched` from here
+    against `yd1qisr...-demo-patched` from the fixed-output branch -- same
+    tree, same hash, different path. Rooting this one would protect a tree
+    nothing ever asks for again."""
+    tree = tmp_path / "built"
+    tree.mkdir()
+    calls = []
+
+    def fake_run(argv, *a, **kw):
+        calls.append(argv)
+        if argv[0] == "nix-build":
+            return subprocess.CompletedProcess(argv, 0, f"{tree}\n", "")
+        if argv[0] == "nix-hash":
+            return subprocess.CompletedProcess(argv, 0, "sha256-BUILT\n", "")
+        if argv[0] == "nix-store":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        raise AssertionError(f"unexpected binary: {argv}")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "s"))
+    proj = tmp_path / "proj"
+    (proj / ".pnix").mkdir(parents=True)
+    out = patchhash.compute(proj, {"foo": {"patches": [1]}}, ["foo"])
+    assert out == {"foo": "sha256-BUILT"}
+    assert not any(a[0] == "nix-store" for a in calls)
+
+
+def test_paths_reads_the_store_paths_out_of_an_evaluation(tmp_path,
+                                                          monkeypatch):
+    """Evaluation, not a build: a recorded hash is what makes a fixed-output
+    path knowable up front."""
+    def fake_run(argv, *a, **kw):
+        assert argv[0] == "nix-instantiate", argv
+        assert "--eval" in argv
+        assert "nix-build" not in argv
+        return subprocess.CompletedProcess(
+            argv, 0, json.dumps(["/nix/store/a-one", "/nix/store/b-two"]), "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    proj = tmp_path / "proj"
+    (proj / ".pnix").mkdir(parents=True)
+    got = patchhash.paths(proj, {"one": {}, "two": {}}, ["one", "two"])
+    assert got == {"one": "/nix/store/a-one", "two": "/nix/store/b-two"}
+
+
+def test_paths_keeps_the_recorded_hashes_in_the_temp_lock(tmp_path,
+                                                          monkeypatch):
+    """Stripping them here would drop the pin to the input-addressed branch,
+    where the path depends on the nixpkgs applying the patch -- so the root
+    would protect a tree nothing will ask for."""
+    seen = {}
+    proj = tmp_path / "proj"
+    (proj / ".pnix").mkdir(parents=True)
+
+    def fake_run(argv, *a, **kw):
+        # Read it off disk while the call is in flight: the expression is one
+        # argv element, so picking the path back out of it is its own bug.
+        assert any(patchhash.TMP_NAME in x for x in argv), argv
+        seen["lock"] = json.loads(
+            (proj / ".pnix" / patchhash.TMP_NAME).read_text())
+        return subprocess.CompletedProcess(argv, 0, json.dumps(["/nix/store/x"]),
+                                           "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    patchhash.paths(proj, {"one": {"patchedHash": "sha256-KEEP"}}, ["one"])
+    assert seen["lock"]["pins"]["one"]["patchedHash"] == "sha256-KEEP"
+
+
+def test_a_failed_path_lookup_is_not_fatal(tmp_path, monkeypatch):
+    def fake_run(argv, *a, **kw):
+        return subprocess.CompletedProcess(argv, 1, "", "no pin called nixpkgs")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    proj = tmp_path / "proj"
+    (proj / ".pnix").mkdir(parents=True)
+    assert patchhash.paths(proj, {"one": {}}, ["one"]) == {}
+
+
+def test_the_temp_lock_is_removed_after_a_path_lookup(tmp_path, monkeypatch):
+    def fake_run(argv, *a, **kw):
+        return subprocess.CompletedProcess(argv, 0, json.dumps(["/x"]), "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    proj = tmp_path / "proj"
+    (proj / ".pnix").mkdir(parents=True)
+    patchhash.paths(proj, {"one": {}}, ["one"])
+    assert not (proj / ".pnix" / patchhash.TMP_NAME).exists()

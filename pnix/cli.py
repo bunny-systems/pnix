@@ -266,12 +266,15 @@ def _hash_patches(project: Path, result: dict, existing: dict,
         if patchhash.needs_recompute(result[name], existing.get(name, {}),
                                      verify_all=verify_patches)
     ]
+    carried = []
     for name, entry in result.items():
         prior = existing.get(name, {})
         if (entry.get("patches") and name not in todo
                 and "patchedHash" in prior):
             entry["patchedHash"] = prior["patchedHash"]
+            carried.append(name)
     if not todo:
+        _root_patched(project, result, nixpkgs_pin)
         return
     fresh = patchhash.compute(project, result, todo,
                               nixpkgs_pin=nixpkgs_pin)
@@ -292,6 +295,34 @@ def _hash_patches(project: Path, result: dict, existing: dict,
                 file=sys.stderr,
             )
         result[name]["patchedHash"] = value
+    _root_patched(project, result, nixpkgs_pin)
+
+
+def _root_patched(project: Path, result: dict, nixpkgs_pin: str) -> None:
+    """Keep every patched pin's tree out of the garbage collector.
+
+    A patched tree is a build *input*, so nothing in a system closure holds it
+    and a timed collection takes it -- then the next evaluation pays the whole
+    `applyPatches` build again. One link per patched pin fixes that.
+
+    Called after the hashes are final and resolved through `paths()`, not from
+    the hashes themselves: the path the resolver names comes from the recorded
+    hash, and `compute` builds with the hash *stripped*, so its own output is a
+    different store path. Rooting that one would protect a tree nothing asks
+    for.
+
+    A pin whose fixed-output tree has not been built yet is skipped rather than
+    realised, so it stays unrooted until something builds it and the next
+    update picks it up -- the same re-rooting `tack` does on every run.
+    """
+    patched = sorted(name for name, entry in result.items()
+                     if entry.get("patches"))
+    patchhash.prune(project, set(patched))
+    if patched:
+        patchhash.root(
+            project,
+            patchhash.paths(project, result, patched, nixpkgs_pin=nixpkgs_pin),
+        )
 
 
 def _resolve_all(project: Path, names: list[str], write: bool,

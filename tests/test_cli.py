@@ -1171,3 +1171,71 @@ def test_the_patch_build_is_given_every_pin_not_only_the_recomputed_ones(
     cli.main(["--project", str(patched_project), "update"])
     assert seen["names"] == ["foo"], seen
     assert seen["pins"] == {"foo", "nixpkgs"}, seen
+
+
+# --- gc roots for patched trees --------------------------------------------
+
+def _root_calls(monkeypatch):
+    """Record which store paths got rooted, through the real code path."""
+    rooted = {}
+    monkeypatch.setattr(
+        "pnix.patchhash.root",
+        lambda project, built: rooted.update(built),
+    )
+    return rooted
+
+
+def test_update_roots_the_resolvers_path_not_the_build_output(
+        patched_project, monkeypatch):
+    """The whole point of resolving through `paths()`: `compute` returns the
+    input-addressed build, which is a different store path from the one the
+    recorded hash names."""
+    rooted = _root_calls(monkeypatch)
+    monkeypatch.setattr(
+        "pnix.patchhash.compute",
+        lambda project, pins, names, nixpkgs_pin="nixpkgs": {
+            n: "sha256-TREE" for n in names
+        },
+    )
+    monkeypatch.setattr(
+        "pnix.patchhash.paths",
+        lambda project, pins, names, nixpkgs_pin="nixpkgs": {
+            n: f"/nix/store/fod-{n}" for n in names
+        },
+    )
+    assert cli.main(["--project", str(patched_project), "update"]) == 0
+    assert rooted == {"foo": "/nix/store/fod-foo"}
+
+
+def test_the_path_lookup_sees_the_hash_that_was_just_recorded(
+        patched_project, monkeypatch):
+    """`paths()` derives the fixed-output path from the hash, so it has to run
+    after the hash lands in `result` -- not before, where the pin would still
+    resolve to its input-addressed path."""
+    seen = {}
+    monkeypatch.setattr(
+        "pnix.patchhash.compute",
+        lambda project, pins, names, nixpkgs_pin="nixpkgs": {
+            n: "sha256-FRESH" for n in names
+        },
+    )
+
+    def fake_paths(project, pins, names, nixpkgs_pin="nixpkgs"):
+        seen.update({n: pins[n].get("patchedHash") for n in names})
+        return {}
+
+    monkeypatch.setattr("pnix.patchhash.paths", fake_paths)
+    cli.main(["--project", str(patched_project), "update"])
+    assert seen == {"foo": "sha256-FRESH"}
+
+
+def test_a_pin_with_no_patches_is_unrooted(fake_project, monkeypatch):
+    """Otherwise a pin that loses its patches keeps its last patched tree alive
+    forever -- the one way this could leak store space instead of saving
+    rebuild time."""
+    pruned = {}
+    monkeypatch.setattr("pnix.patchhash.prune",
+                        lambda project, keep: pruned.update(keep=keep))
+    monkeypatch.setattr("pnix.patchhash.paths", lambda *a, **k: {})
+    assert cli.main(["--project", str(fake_project), "update"]) == 0
+    assert pruned.get("keep") == set()
