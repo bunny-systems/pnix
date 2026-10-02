@@ -375,6 +375,17 @@ def _resolve_all(project: Path, names: list[str], write: bool,
             f"{', '.join(unknown)}: not a declared pin. known: {known}"
         )
 
+    # `--repatch foo` where foo declares no patches resolves nothing to re-fetch,
+    # so it reads as a successful no-op while the pin the user meant goes
+    # untouched -- the same trap as a misspelled name, one level down.
+    unpatched = sorted(n for n in (repatch or ()) if not pins[n].get("patches"))
+    if unpatched:
+        raise UsageError(
+            f"{', '.join(unpatched)}: --repatch names a pin that declares no "
+            f"patches, so there is nothing to re-resolve. Drop it, or run "
+            f"`pnix update {' '.join(unpatched)}` to move the pin itself."
+        )
+
     # Holding a pin still means keeping the entry it already has. One that was
     # never locked has no entry to keep, so excluding it would drop it from the
     # lock -- the opposite of what the flag is for.

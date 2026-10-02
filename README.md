@@ -662,6 +662,35 @@ is back in the store path. That is the state a lock written by an older pnix is
 in, and pure evaluation of such a pin is refused outright rather than allowed to
 diverge. `pnix update` is the fix; a `trace` says so.
 
+### `update` places the patched tree where the lock says it is
+
+Learning a `patchedHash` means building the tree, and that build cannot be the
+fixed-output one — its hash is the thing being computed, so the derivation would
+validate against a value that is not there yet. `pnix update` therefore builds
+the tree *input-addressed*, hashes it, and then adds it to the store at the
+fixed-output path the lock now names, with
+`nix-store --add-fixed --recursive sha256`.
+
+Without that step the tree is built **twice** per patch change — once to learn
+the hash and once to use it, at two unrelated store paths. Measured on a
+nixpkgs-sized tree (333 MB, 54 304 files):
+
+| | before | after |
+|---|---|---|
+| `update` | 47 s | 72 s |
+| first build afterwards | 46 s | nothing to do |
+| total | **93 s** | **72 s** |
+
+The added 25 s is a copy of the tree (6 s) plus the add itself (20 s). The copy
+exists because `--add-fixed` takes the store path's name from the basename and
+has no `--name`, so the tree has to be staged under exactly `<pin>-patched`
+first; a symlink does not work, as it hashes the link rather than the target.
+Staging honours `TMPDIR`, as nix's own builds do, so a nixpkgs-sized patched pin
+wants that much room there.
+
+If any of it fails, `update` says so and carries on — the lock is already
+correct, and the only consequence is the rebuild that used to happen anyway.
+
 ### Patched trees are kept out of the garbage collector
 
 A patched tree is a build *input*, so nothing in a system closure references it

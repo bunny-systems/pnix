@@ -310,10 +310,18 @@ def drift(node: dict, name: str) -> list[str]:
         elif pull.state == "closed" and not pull.merged and not patch.get("merged"):
             out.append(f"{label} has been closed without merging since you locked it")
         if pull.head != patch["head"]:
+            moved = (f"{label} has new commits since you locked "
+                     f"({patch['head'][:8]} -> {pull.head[:8]})")
+            # `--repatch` adopts more commits, which is not the fix for a patch
+            # upstream has already merged: the rev the pin moves to will carry
+            # the change, so the patch itself is what should go. Suggesting
+            # `--repatch` there sends the user to re-download a diff that will
+            # then fail to apply.
             out.append(
-                f"{label} has new commits since you locked "
-                f"({patch['head'][:8]} -> {pull.head[:8]}) "
-                f"-- `pnix update --repatch {name}` to adopt them"
+                f"{moved} -- `pnix update --repatch {name}` to adopt them"
+                if not pull.merged else
+                f"{moved}, but it is merged -- dropping the patch is the fix, "
+                f"not `--repatch`"
             )
         if pull.base != patch["base"]:
             out.append(f"{label} was rebased onto a new base "

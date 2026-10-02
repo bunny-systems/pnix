@@ -347,14 +347,34 @@ def test_drift_names_the_command_that_adopts_new_commits(monkeypatch):
 
 
 def test_a_merged_pr_does_not_suggest_repatching(monkeypatch):
-    """Adopting more commits is not the fix for a patch upstream already has."""
-    forge = FakeForge(pull=Pull(head="h" * 40, base="b" * 40,
+    """Adopting more commits is not the fix for a patch upstream already has.
+
+    The head has to *move* here. Holding it still means the new-commits branch
+    is never reached and the assertion passes whatever the implementation does
+    -- which is how this test sat green over a real bug.
+    """
+    forge = FakeForge(pull=Pull(head="z" * 40, base="b" * 40,
                                 state="closed", merged=True))
     monkeypatch.setattr("pnix.forges.get", lambda name: forge)
     node = {"url": "https://github.com/o/r",
             "patches": [{"kind": "pr", "forge": "github", "number": 7,
                          "head": "h" * 40, "base": "b" * 40, "merged": False}]}
-    assert not any("--repatch" in line for line in patches.drift(node, "finit"))
+    lines = patches.drift(node, "finit")
+    assert any("new commits" in line for line in lines), lines
+    assert not any("`pnix update --repatch" in line for line in lines), lines
+
+
+def test_a_merged_and_moved_pr_says_what_to_do_instead(monkeypatch):
+    """Reporting drift with no stated way to act on it is the thing `drift`
+    exists to avoid, so suppressing the hint is not enough on its own."""
+    forge = FakeForge(pull=Pull(head="z" * 40, base="b" * 40,
+                                state="closed", merged=True))
+    monkeypatch.setattr("pnix.forges.get", lambda name: forge)
+    node = {"url": "https://github.com/o/r",
+            "patches": [{"kind": "pr", "forge": "github", "number": 7,
+                         "head": "h" * 40, "base": "b" * 40, "merged": False}]}
+    assert any("dropping the patch" in line
+               for line in patches.drift(node, "finit"))
 
 
 def test_a_local_patch_records_the_file_s_hash(tmp_path):

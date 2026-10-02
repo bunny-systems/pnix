@@ -165,3 +165,35 @@ def test_a_git_fetch_node_reaches_the_builtin_whole(local_repo, local_repo_head)
     bad = _fetch_git(base + 'notAFetchGitOption = true; }')
     assert bad.returncode != 0
     assert "not supported by scheme" in bad.stderr
+
+
+def test_a_lock_with_no_patched_hash_says_so_on_stderr():
+    """The migration path for a schema-4 lock: it keeps evaluating, but the store
+    path still depends on which nixpkgs applied the patch, so it has to say so.
+
+    A `trace` goes to stderr, which the pure-Nix case files cannot see -- the
+    driver only compares values -- so this is the only place the warning can be
+    checked at all. It was specified and never written.
+    """
+    flakes = ROOT / "tests" / "nix" / "fixtures" / "flakes"
+    lock = (ROOT / "tests" / "nix" / "fixtures" / "locks" / "patched.lock.json")
+    expr = f"""
+      builtins.seq
+        (import {ROOT}/pnix/resolver/eval/resolve.nix {{
+          lockFile = {lock};
+          system = "x86_64-linux";
+          overrides = {{
+            nixpkgs = {flakes}/fakepkgs;
+            patched = {flakes}/simple;
+          }};
+        }}).patched.outPath
+        null
+    """
+    proc = subprocess.run(
+        ["nix-instantiate", "--eval", "--strict", "--expr", expr,
+         *NO_EXPERIMENTAL],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "has no patchedHash" in proc.stderr, proc.stderr
+    assert "pnix update" in proc.stderr

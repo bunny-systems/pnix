@@ -1,4 +1,9 @@
 # ---> Nix
+# pnix writes this beside the real lock while it builds a patched tree, and
+# removes it in a `finally` -- which cannot run on SIGKILL. Ignored so a
+# leftover cannot be committed into a vendored .pnix/.
+pins.lock.json.pnix-tmp
+
 # Ignore build outputs from performing a nix-build or `nix build` command
 result
 result-*

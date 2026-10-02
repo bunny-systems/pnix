@@ -470,7 +470,9 @@ def test_computing_does_not_root_its_own_build(tmp_path, monkeypatch):
     (proj / ".pnix").mkdir(parents=True)
     out = patchhash.compute(proj, {"foo": {"patches": [1]}}, ["foo"])
     assert out == {"foo": "sha256-BUILT"}
-    assert not any(a[0] == "nix-store" for a in calls)
+    # It does call nix-store, to place the tree at its locked path; what it must
+    # not do is root this path.
+    assert not any("--add-root" in a for a in calls)
 
 
 def test_paths_reads_the_store_paths_out_of_an_evaluation(tmp_path,
@@ -533,3 +535,169 @@ def test_the_temp_lock_is_removed_after_a_path_lookup(tmp_path, monkeypatch):
     (proj / ".pnix").mkdir(parents=True)
     patchhash.paths(proj, {"one": {}}, ["one"])
     assert not (proj / ".pnix" / patchhash.TMP_NAME).exists()
+
+
+# --- placing the tree at the path the lock names ---------------------------
+
+def _materialising(monkeypatch, added=None, rc=0):
+    """Stub nix-store's `--add-fixed`, recording the directory it was given."""
+    calls = []
+
+    def fake_run(argv, *a, **kw):
+        calls.append(argv)
+        if argv[0] == "nix-store":
+            target = argv[argv.index("sha256") + 1]
+            out = added if added is not None else (
+                f"/nix/store/deadbeef-{Path(target).name}")
+            return subprocess.CompletedProcess(argv, rc, f"{out}\n", "boom")
+        raise AssertionError(f"unexpected binary: {argv}")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    return calls
+
+
+def test_the_tree_is_staged_under_the_name_the_resolver_asks_for(tmp_path,
+                                                                 monkeypatch):
+    """`--add-fixed` takes the name from the basename and has no `--name`, and a
+    store path's basename carries a hash prefix -- so a copy named exactly
+    `<pin>-patched` is the whole reason this step exists."""
+    calls = _materialising(monkeypatch)
+    tree = tmp_path / "abc123-foo-patched"
+    tree.mkdir()
+    (tree / "f").write_text("x")
+    got = patchhash._materialise("foo", str(tree), "sha256-AAA")
+    assert got == "/nix/store/deadbeef-foo-patched"
+    argv = calls[0]
+    assert argv[:4] == ["nix-store", "--add-fixed", "--recursive", "sha256"]
+    assert Path(argv[4]).name == "foo-patched"
+
+
+def test_the_staged_copy_is_removed_even_though_store_trees_are_read_only(
+        tmp_path, monkeypatch):
+    """A mode-555 directory cannot have its contents unlinked, so without
+    putting the write bit back the staging copy outlives the run -- and for a
+    nixpkgs-sized tree that is 333 MB left in TMPDIR."""
+    seen = {}
+
+    def fake_run(argv, *a, **kw):
+        seen["staged"] = argv[argv.index("sha256") + 1]
+        return subprocess.CompletedProcess(
+            argv, 0, "/nix/store/deadbeef-foo-patched\n", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    tree = tmp_path / "src"
+    (tree / "sub").mkdir(parents=True)
+    (tree / "sub" / "f").write_text("x")
+    (tree / "sub" / "f").chmod(0o444)
+    (tree / "sub").chmod(0o555)
+    tree.chmod(0o555)
+    patchhash._materialise("foo", str(tree), "sha256-AAA")
+    assert not Path(seen["staged"]).parent.exists()
+
+
+def test_the_suffix_matches_what_patch_nix_names_the_derivation():
+    """If `patch.nix` is renamed and this is not, every `--add-fixed` lands on a
+    path nothing asks for and the tree is quietly built twice again."""
+    patch_nix = (Path(__file__).resolve().parent.parent
+                 / "pnix" / "resolver" / "eval" / "patch.nix")
+    assert f'name = "${{name}}{patchhash.SUFFIX}"' in patch_nix.read_text()
+
+
+def test_a_wrongly_named_result_is_reported_rather_than_left_in_the_store(
+        tmp_path, monkeypatch, capsys):
+    _materialising(monkeypatch, added="/nix/store/deadbeef-something-else")
+    tree = tmp_path / "t"
+    tree.mkdir()
+    assert patchhash._materialise("foo", str(tree), "sha256-AAA") is None
+    assert "not the name the resolver asks for" in capsys.readouterr().err
+
+
+def test_a_failed_add_is_not_fatal(tmp_path, monkeypatch, capsys):
+    """The lock is already correct; the only consequence is the rebuild that
+    used to happen unconditionally."""
+    _materialising(monkeypatch, rc=1)
+    tree = tmp_path / "t"
+    tree.mkdir()
+    assert patchhash._materialise("foo", str(tree), "sha256-AAA") is None
+    assert "rebuilt on first use" in capsys.readouterr().err
+
+
+def test_a_tree_that_cannot_be_staged_is_not_fatal(tmp_path, monkeypatch,
+                                                   capsys):
+    def fake_run(argv, *a, **kw):
+        raise AssertionError("nix-store must not run when staging failed")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    assert patchhash._materialise("foo", str(tmp_path / "gone"),
+                                  "sha256-AAA") is None
+    assert "could not stage" in capsys.readouterr().err
+
+
+def test_only_a_sha256_hash_is_placed(tmp_path, monkeypatch):
+    """`--add-fixed sha256` is the only form whose path matches a recursive
+    sha256 fixed-output derivation; anything else would land elsewhere."""
+    def fake_run(argv, *a, **kw):
+        raise AssertionError("must not run for a non-sha256 hash")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    assert patchhash._materialise("foo", str(tmp_path), "sha512-AAA") is None
+
+
+def test_computing_places_every_tree_it_built(tmp_path, monkeypatch):
+    """The step that turns two builds per patch change into one. Without this
+    assertion, dropping the call from `compute` passes the whole suite."""
+    calls = []
+    trees = {}
+    for name in ("one", "two"):
+        t = tmp_path / f"hash-{name}-patched"
+        t.mkdir()
+        (t / "f").write_text(name)
+        trees[name] = t
+
+    def fake_run(argv, *a, **kw):
+        calls.append(argv)
+        if argv[0] == "nix-build":
+            return subprocess.CompletedProcess(
+                argv, 0, "\n".join(str(trees[n]) for n in ("one", "two")) + "\n",
+                "")
+        if argv[0] == "nix-hash":
+            return subprocess.CompletedProcess(argv, 0, "sha256-AAA\n", "")
+        if argv[0] == "nix-store":
+            target = argv[argv.index("sha256") + 1]
+            return subprocess.CompletedProcess(
+                argv, 0, f"/nix/store/deadbeef-{Path(target).name}\n", "")
+        raise AssertionError(f"unexpected binary: {argv}")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    proj = tmp_path / "proj"
+    (proj / ".pnix").mkdir(parents=True)
+    patchhash.compute(proj, {"one": {"patches": [1]}, "two": {"patches": [1]}},
+                      ["one", "two"])
+    staged = [Path(a[a.index("sha256") + 1]).name
+              for a in calls if "--add-fixed" in a]
+    assert staged == ["one-patched", "two-patched"]
+
+
+def test_a_relative_project_path_still_finds_the_lock(tmp_path, monkeypatch):
+    """`_nix_path` strips the leading slash, so a relative project path used to
+    produce `/.pnix/...` and fail on a path that plainly exists. Found by
+    tripping over it while building a real project by hand."""
+    proj = tmp_path / "proj"
+    (proj / ".pnix").mkdir(parents=True)
+    seen = {}
+
+    def fake_run(argv, *a, **kw):
+        if argv[0] == "nix-build":
+            seen["expr"] = next(x for x in argv if patchhash.TMP_NAME in x)
+            return subprocess.CompletedProcess(argv, 0, "/nix/store/x-foo\n", "")
+        if argv[0] == "nix-hash":
+            return subprocess.CompletedProcess(argv, 0, "sha256-A\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    patchhash.compute(Path("proj"), {"foo": {"patches": [1]}}, ["foo"])
+    # An unresolved relative path yields `(/. + ".pnix/...")`, which is the root
+    # of the filesystem rather than the project.
+    assert '"proj/.pnix/' not in seen["expr"]
+    assert str(proj).lstrip("/") in seen["expr"]

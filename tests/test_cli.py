@@ -1239,3 +1239,22 @@ def test_a_pin_with_no_patches_is_unrooted(fake_project, monkeypatch):
     monkeypatch.setattr("pnix.patchhash.paths", lambda *a, **k: {})
     assert cli.main(["--project", str(fake_project), "update"]) == 0
     assert pruned.get("keep") == set()
+
+
+def test_repatch_on_a_pin_with_no_patches_is_refused(fake_project, capsys):
+    """It would resolve nothing and read as a successful no-op, while the pin
+    the user meant goes untouched."""
+    assert cli.main(["--project", str(fake_project), "update",
+                     "--repatch", "foo"]) == 2
+    err = capsys.readouterr().err
+    assert "declares no patches" in err
+
+
+def test_repatch_still_accepts_a_pin_that_has_patches(patched_project,
+                                                      monkeypatch):
+    monkeypatch.setattr("pnix.patchhash.compute",
+                        lambda project, pins, names, nixpkgs_pin="nixpkgs": {
+                            n: "sha256-T" for n in names})
+    monkeypatch.setattr("pnix.patchhash.paths", lambda *a, **k: {})
+    assert cli.main(["--project", str(patched_project), "update",
+                     "--repatch", "foo"]) == 0

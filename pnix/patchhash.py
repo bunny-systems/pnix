@@ -12,14 +12,18 @@ hash is the one error nothing downstream checks: a fixed-output derivation is
 verified against its hash and never against its inputs.
 """
 
+import contextlib
 import hashlib
 import json
 import os
+import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-from . import lock
+from . import lock, vendor
 
 RESOLVER = Path(__file__).resolve().parent / "resolver" / "eval" / "resolve.nix"
 
@@ -35,6 +39,22 @@ TMP_NAME = "pins.lock.json.pnix-tmp"
 
 class PatchHashError(Exception):
     """A patched tree could not be built, or could not be hashed."""
+
+
+def _run(argv: list[str], who: str) -> subprocess.CompletedProcess:
+    """`subprocess.run`, with a missing binary reported rather than raised.
+
+    Everything here shells out to nix, and a `FileNotFoundError` escaping to the
+    top is a traceback where the user needs one sentence naming the command they
+    do not have.
+    """
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        raise PatchHashError(
+            f"{who}: {argv[0]} is not on PATH, and pnix needs it to hash a "
+            f"patched tree. ({exc})"
+        ) from exc
 
 
 def needs_recompute(locked: dict, prior: dict, verify_all: bool = False) -> bool:
@@ -118,7 +138,11 @@ def _write_tmp_lock(project: Path, pins: dict[str, dict],
     hashes for a path lookup, where the fixed-output branch is exactly what
     makes the store path knowable without building anything.
     """
-    lock_dir = Path(project) / ".pnix"
+    # `vendor.DEST`, not a literal ".pnix": a `path` patch is resolved relative
+    # to the lock, so if the vendored directory ever moves and this does not,
+    # every local patch silently stops being found -- the exact failure TMP_NAME's
+    # own comment exists to prevent.
+    lock_dir = Path(project).resolve() / vendor.DEST
     lock_dir.mkdir(parents=True, exist_ok=True)
     tmp = lock_dir / TMP_NAME
     entries = {
@@ -139,10 +163,10 @@ def compute(project: Path, pins: dict[str, dict], names: list[str],
         return {}
     tmp = _write_tmp_lock(project, pins, strip_hash=True)
     try:
-        proc = subprocess.run(
+        proc = _run(
             ["nix-build", "--no-out-link",
              "-E", _expression(tmp, names, nixpkgs_pin), *NO_EXPERIMENTAL],
-            capture_output=True, text=True, check=False,
+            ", ".join(names),
         )
         if proc.returncode != 0:
             raise PatchHashError(_build_failure(names, proc.stderr))
@@ -159,7 +183,10 @@ def compute(project: Path, pins: dict[str, dict], names: list[str],
         # `ch7d91z…-demo-patched` here against `yd1qisr…-demo-patched` from the
         # fixed-output branch, same tree, same hash. Rooting happens in
         # `cli._hash_patches`, after the hashes are final, against `paths()`.
-        return {name: _hash_path(name, path) for name, path in built.items()}
+        hashes = {name: _hash_path(name, path) for name, path in built.items()}
+        for name, path in built.items():
+            _materialise(name, path, hashes[name])
+        return hashes
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -222,9 +249,9 @@ def _hash_path(name: str, path: str) -> str:
     NAR hashing is the default mode, which is the one the lock wants; `--flat`
     would be the wrong hash for a directory.
     """
-    proc = subprocess.run(
+    proc = _run(
         ["nix-hash", "--type", "sha256", "--sri", path, *NO_EXPERIMENTAL],
-        capture_output=True, text=True, check=False,
+        name,
     )
     if proc.returncode != 0 or not proc.stdout.strip():
         raise PatchHashError(
@@ -350,3 +377,88 @@ def paths(project: Path, pins: dict[str, dict], names: list[str],
         return dict(zip(names, found, strict=True))
     finally:
         tmp.unlink(missing_ok=True)
+
+
+# --- putting the built tree where the lock says it is ----------------------
+#
+# Without this the tree is built *twice* per patch change: once input-addressed
+# to learn the hash, and again as the fixed-output derivation that actually gets
+# used, at a different store path with nothing connecting the two. Measured on a
+# real project: `ch7d91z…-demo-patched` from the first build against
+# `yd1qisr…-demo-patched` from the second, same bytes, same recorded hash.
+#
+# `nix-store --add-fixed --recursive sha256` lands on *exactly* the fixed-output
+# path, verified against the resolver's own answer -- but only when the thing it
+# reads is named `<pin>-patched`, because it takes the name from the basename and
+# has no `--name`. A store path's basename carries a hash prefix, and the new
+# CLI's `nix store add --name` needs an experimental feature this project
+# switches off, so the tree is copied to a correctly-named directory first.
+# Measured: a symlink does not work, `--add-fixed` hashes the link node itself.
+#
+# This name has to match `patch.nix`'s `name = "${name}-patched"`. A test greps
+# for it, because a rename there would silently put us back to two builds.
+SUFFIX = "-patched"
+
+
+def _unlock(path: Path) -> None:
+    """Make a copied store tree removable again.
+
+    Store paths are read-only, `copytree` preserves that, and a mode-555
+    directory cannot have its contents unlinked -- so the staging copy outlives
+    the run unless the write bits go back on first.
+    """
+    for root, dirs, files in os.walk(path):
+        for entry in (root, *(os.path.join(root, d) for d in dirs)):
+            with contextlib.suppress(OSError):
+                os.chmod(entry, os.stat(entry).st_mode | stat.S_IWUSR)
+        for f in files:
+            target = os.path.join(root, f)
+            with contextlib.suppress(OSError):
+                os.chmod(target, os.stat(target).st_mode | stat.S_IWUSR)
+
+
+def _materialise(name: str, path: str, sri: str) -> str | None:
+    """Add the built tree under the fixed-output path the lock now names.
+
+    Returns that path, or None when it could not be done -- which is not an
+    error: the lock is already correct, and the only consequence is the rebuild
+    that used to happen unconditionally.
+
+    Costs one copy of the tree (the staging directory honours `TMPDIR`, as nix's
+    own builds do, so a nixpkgs-sized tree wants that much room there). That buys
+    a whole `applyPatches` build, which for the same tree is 46 s plus a copy of
+    its own inside the sandbox.
+    """
+    if not sri.startswith("sha256-"):
+        return None
+    staging = tempfile.mkdtemp(prefix="pnix-materialise-")
+    target = Path(staging) / f"{name}{SUFFIX}"
+    try:
+        shutil.copytree(path, target, symlinks=True)
+        proc = subprocess.run(
+            ["nix-store", "--add-fixed", "--recursive", "sha256", str(target),
+             *NO_EXPERIMENTAL],
+            capture_output=True, text=True, check=False,
+        )
+        added = proc.stdout.strip()
+        if proc.returncode != 0 or not added:
+            print(f"pnix: {name}: could not place the patched tree at its "
+                  f"locked path ({proc.stderr.strip()}); it will be rebuilt on "
+                  f"first use.", file=sys.stderr)
+            return None
+        # A name that does not match means `patch.nix` and `SUFFIX` have drifted,
+        # and the tree just added is a path nothing will ever ask for. Say so
+        # rather than leaving a silent duplicate in the store.
+        if not added.endswith(f"-{name}{SUFFIX}"):
+            print(f"pnix: {name}: placed the patched tree at {added}, which is "
+                  f"not the name the resolver asks for; it will be rebuilt.",
+                  file=sys.stderr)
+            return None
+        return added
+    except OSError as exc:
+        print(f"pnix: {name}: could not stage the patched tree ({exc}); it will "
+              f"be rebuilt on first use.", file=sys.stderr)
+        return None
+    finally:
+        _unlock(Path(staging))
+        shutil.rmtree(staging, ignore_errors=True)
