@@ -208,7 +208,10 @@ class Progress:
 
     #: A pin has no upstream to be "ahead" or "diverged" *of* -- the lock holds
     #: one rev, and saying more would mean a commit-graph walk per pin.
-    STATES = ("new", "updated", "repaired", "relocked", "unchanged")
+    #: `unreachable` is the one state that is not a comparison of two revs: it
+    #: is the absence of the second one.
+    STATES = ("new", "updated", "repaired", "relocked", "unchanged",
+              "unreachable")
 
     def finish(self, name: str, before: dict, after: dict,
                repaired: bool = False) -> None:
@@ -238,6 +241,21 @@ class Progress:
             self._inflight.discard(name)
             line = (f"  [{self.done:>{len(str(self.total))}}/{self.total}] "
                     f"{name:<{self.width}}  {state:<9} {detail}")
+        if not self.quiet:
+            self._say(line)
+
+    def unreachable(self, name: str) -> None:
+        """A pin whose remote did not answer.
+
+        Counted, not explained: the reason is a line of git's own stderr, which
+        is too wide for a results column and belongs with the report.
+        """
+        with self._lock:
+            self.done += 1
+            self.counts["unreachable"] += 1
+            self._inflight.discard(name)
+            line = (f"  [{self.done:>{len(str(self.total))}}/{self.total}] "
+                    f"{name:<{self.width}}  unreachable")
         if not self.quiet:
             self._say(line)
 
@@ -336,12 +354,20 @@ def _resolve_all(project: Path, names: list[str], write: bool,
                  animate: bool = True,
                  verify_patches: bool = False,
                  repatch: list[str] | None = None,
-                 nixpkgs_pin: str = "nixpkgs") -> tuple[dict, dict]:
+                 nixpkgs_pin: str = "nixpkgs",
+                 unreachable: dict[str, Exception] | None = None
+                 ) -> tuple[dict, dict]:
     """Resolve every declared pin. Returns (resolved, previous lock contents).
 
     `prefetch=False` is what makes `pnix look` cheap: resolving a ref is one
     `git ls-remote`, while hashing means downloading the source. Drift can be
     reported from the rev alone.
+
+    `unreachable` is how a caller opts out of the default "one dead remote
+    aborts the run": pass a dict and every `RefError` lands in it instead,
+    keyed by pin. Opt-in rather than a flag, because the dict is also the
+    report -- a caller that wants to survive the failure has to say what it
+    will do with it.
     """
     lock_path = project / LOCK_NAME
     existing, migrated_from = lock_mod.read_at(lock_path)
@@ -433,9 +459,19 @@ def _resolve_all(project: Path, names: list[str], write: bool,
         # `type` is optional when the URL's host says what runs there;
         # schema.validate has already refused anything it could not settle.
         src = sources.get(schema.type_of(spec))
-        locked = src.resolve(spec)
-
         prior = existing.get(name, {})
+        try:
+            locked = src.resolve(spec)
+        except refs.RefError as e:
+            # Keeping `prior` rather than dropping the pin: it is still
+            # declared and still locked, and removing it here would reach the
+            # report as "locked but no longer declared" -- an answer invented
+            # out of a question we could not ask.
+            if unreachable is None:
+                raise
+            unreachable[name] = e
+            progress.unreachable(name)
+            return name, prior
         # Missing something `prefetch` should have produced: stale however well
         # the fetch fields match, or the entry is frozen incomplete forever.
         incomplete = bool(prior) and not all(
@@ -648,9 +684,12 @@ def cmd_look(args) -> int:
     project = find_project(args.project)
     _warn_if_stale(project)
     cache = _cache_for(args)
+    # `look` is a report. A private repo this machine has no key for is one
+    # pin's answer missing, not a reason to say nothing about the other twenty.
+    unreachable: dict[str, Exception] = {}
     fresh, existing = _resolve_all(project, [], write=False, roots=args.root,
                                    prefetch=False, workers=args.workers,
-                                   cache=cache)
+                                   cache=cache, unreachable=unreachable)
     moved = False
     # Same width-aligned column `update` prints, so the two commands read as one
     # tool. Widest of everything that might be named, since the three loops below
@@ -667,10 +706,18 @@ def cmd_look(args) -> int:
         now = fresh[name].get("rev")
         if was and now and was != now:
             row(name, f"{was[:8]} -> {now[:8]}")
+    # Not filtered by `unreachable`: whether a pin is in the lock is answered
+    # by the lock alone, so it stays true for a pin we could not reach, and a
+    # new pin behind a key we lack needs both halves of the story.
     for name in sorted(set(fresh) - set(existing)):
         row(name, "not locked yet")
     for name in sorted(set(existing) - set(fresh)):
         row(name, "locked but no longer declared")
+    # Through `row`, so a run with one dead remote cannot print "all pins
+    # current" -- it is precisely the pin we know nothing about.
+    for name in sorted(unreachable):
+        row(name, "could not be reached")
+        print(f"pnix: {name}: {unreachable[name]}", file=sys.stderr)
 
     # Patches. `advice` reads the lock alone; `drift` costs one request per
     # tracked PR, which is cheap because `head` and `base` were stored at lock
@@ -692,6 +739,11 @@ def cmd_look(args) -> int:
               f"up to {int(oldest // 60)}m{int(oldest % 60)}s old "
               f"-- pass --refresh to re-check",
               file=sys.stderr)
+    # An unreachable pin is not drift; it is a question left unanswered, so it
+    # fails the command with or without `--exit-code`. A gate that passes
+    # because pnix could not look is worse than one that fails.
+    if unreachable:
+        return 1
     # Drift is not an error -- `look` is a report, and a report that fails is
     # useless in a pipeline. `--exit-code` is for the caller that wants a gate.
     return 1 if (moved and args.exit_code) else 0
@@ -770,8 +822,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"ThreadPoolExecutor refuses a pool of none."
             )
         return args.func(args)
-    except (ProjectError, UsageError, patchhash.PatchHashError) as e:
-        # Running outside a project is a usage mistake, not a crash.
+    except (ProjectError, UsageError, patchhash.PatchHashError,
+            refs.RefError) as e:
+        # Running outside a project is a usage mistake, not a crash. Nor is a
+        # remote that will not answer: `RefError` already carries git's own
+        # stderr, and a traceback above it only buries the line that says what
+        # to fix.
         print(f"pnix: {e}", file=sys.stderr)
         return 2
 

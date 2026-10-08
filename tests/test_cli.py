@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from pnix import cli, lock, patchhash
+from pnix import cli, lock, patchhash, refs
 
 
 @pytest.fixture
@@ -1258,3 +1258,115 @@ def test_repatch_still_accepts_a_pin_that_has_patches(patched_project,
     monkeypatch.setattr("pnix.patchhash.paths", lambda *a, **k: {})
     assert cli.main(["--project", str(patched_project), "update",
                      "--repatch", "foo"]) == 0
+
+
+@pytest.fixture
+def two_pin_project(tmp_path, monkeypatch):
+    """Two pins, so a failure on one can be told apart from a failed run."""
+    monkeypatch.setattr(
+        "pnix.collect.collect",
+        lambda files, attr="pins": (
+            {"foo": {"type": "github", "url": "https://github.com/o/r",
+                     "ref": "main"},
+             "bar": {"type": "github", "url": "https://github.com/o/private",
+                     "ref": "main"}},
+            {"foo": "/decl.nix", "bar": "/decl.nix"},
+            [],
+        ),
+    )
+    monkeypatch.setattr("pnix.prefetch.tarball",
+                        lambda url: ("sha256-AAA", 1788914643))
+    monkeypatch.setattr("pnix.discover.candidates",
+                        lambda roots, attr="pins": [tmp_path / "decl.nix"])
+    return tmp_path
+
+
+def _denied(url, ref=None):
+    raise refs.RefError(
+        f"git ls-remote {url} main: git@github.com: Permission denied "
+        f"(publickey)."
+    )
+
+
+def test_a_remote_that_refuses_us_is_a_message_not_a_traceback(
+        fake_project, capsys, monkeypatch):
+    """An unreachable remote is an expected failure, like a bad --project.
+
+    It used to escape `main`'s handler and print 40 lines of stack ending in
+    `pnix.refs.RefError`, which buries the one line that says what to fix.
+    """
+    monkeypatch.setattr("pnix.refs.resolve", _denied)
+    rc = cli.main(["--project", str(fake_project), "update"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "pnix: git ls-remote" in err
+    assert "Permission denied" in err
+    assert "Traceback" not in err
+
+
+def test_update_still_stops_when_a_pin_is_unreachable(
+        two_pin_project, monkeypatch):
+    """`look` tolerates an unreachable pin; `update` must not.
+
+    A lock written from a partial resolve would record the pins that answered
+    and silently drop the one that did not.
+    """
+    monkeypatch.setattr("pnix.refs.resolve", _denied)
+    assert cli.main(["--project", str(two_pin_project), "update"]) == 2
+    assert not (two_pin_project / cli.LOCK_NAME).exists()
+
+
+def test_look_reports_the_pins_it_could_reach(
+        two_pin_project, capsys, monkeypatch):
+    """One private repo we have no key for must not cost the other 20 pins."""
+    monkeypatch.setattr("pnix.refs.resolve", lambda url, ref=None: "1" * 40)
+    cli.main(["--project", str(two_pin_project), "update"])
+
+    def resolve(url, ref=None):
+        return _denied(url, ref) if "private" in url else "2" * 40
+
+    monkeypatch.setattr("pnix.refs.resolve", resolve)
+    rc = cli.main(["--project", str(two_pin_project), "look"])
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert "foo" in out and "2" * 8 in out
+    assert "bar" in err and "Permission denied" in err
+
+
+def _denied_except_foo(url, ref=None):
+    return _denied(url, ref) if "private" in url else "2" * 40
+
+
+def test_an_unreachable_pin_gets_one_row_and_no_guesses(
+        two_pin_project, capsys, monkeypatch):
+    """Exactly one line about it, and that line is "we could not look".
+
+    Anything else would be invented: it is still declared and still locked, so
+    neither "not locked yet" nor "locked but no longer declared" is true, and
+    its rev cannot have been compared against anything.
+    """
+    monkeypatch.setattr("pnix.refs.resolve", lambda url, ref=None: "1" * 40)
+    cli.main(["--project", str(two_pin_project), "update"])
+    monkeypatch.setattr("pnix.refs.resolve", _denied_except_foo)
+    cli.main(["--project", str(two_pin_project), "look"])
+    out = capsys.readouterr().out
+    said = [line for line in out.splitlines() if line.startswith("bar")]
+    assert len(said) == 1, said
+    assert "could not be reached" in said[0]
+
+
+def test_a_pin_both_unlocked_and_unreachable_says_both(
+        two_pin_project, capsys, monkeypatch):
+    """Being absent from the lock is not something the network has to confirm.
+
+    Suppressing the "not locked yet" row for an unreachable pin loses the half
+    of the answer pnix is certain about -- that this pin has never resolved
+    here at all, which is the difference between "re-run with your key" and
+    "this pin has never worked".
+    """
+    monkeypatch.setattr("pnix.refs.resolve", _denied_except_foo)
+    cli.main(["--project", str(two_pin_project), "look"])
+    out = capsys.readouterr().out
+    said = [line for line in out.splitlines() if line.startswith("bar")]
+    assert [d for d in said if "not locked yet" in d]
+    assert [d for d in said if "could not be reached" in d]

@@ -110,7 +110,7 @@ reported.
 | `--exclude NAME` | `update` | hold this pin at its locked revision; repeatable |
 | `--workers N` | `update`, `look` | how many pins to resolve at once; default 16 |
 | `--refresh` | `update`, `look` | ignore cached ref lookups; they expire after 60 minutes |
-| `--exit-code` | `look` | exit 1 when anything has drifted, for CI |
+| `--exit-code` | `look` | exit 1 when anything has drifted, for CI; an unreachable pin exits 1 regardless |
 | `--nixpkgs-pin NAME` | `update` | which pin supplies the nixpkgs that applies patches, when it is not called `nixpkgs` |
 | `--repatch [NAME…]` | `update` | re-resolve patch nodes, adopting a tracked PR's new commits; all patched pins when none are named |
 | `--verify-patches` | `update` | rebuild every patched pin's tree and re-check its hash, even when only the nixpkgs applying it moved |
@@ -846,6 +846,7 @@ resolved.chan.version                     # channel pins only
 foo: 1a2b3c4d -> 5e6f7a8b                       a pin moved
 bar: not locked yet                             declared, never updated
 baz: locked but no longer declared              gone from the tree
+qux: could not be reached                       no answer from its remote
 finit: PR #181 is merged upstream; bump the pin's rev and drop the patch
 finit: PR #181 has new commits since you locked (fa14ed16 -> 9c3b2a10) -- `pnix update --repatch finit` to adopt them
 finit: PR #181 was rebased onto a new base (64e41e06 -> 7d18036f)
@@ -856,6 +857,14 @@ It resolves refs but never downloads, so it is one `git ls-remote` per pin plus
 one request per tracked PR. Merged-PR advice is read straight from the lock and
 needs no network at all. `look` never builds, so it never fills in a missing
 `patchedHash`.
+
+One pin whose remote will not answer -- a private repo on a machine without the
+key, a forge that is down -- does not cost you the report on the others. `look`
+names it, prints git's own refusal on stderr, and carries on; `update` still
+stops, because a lock written from a partial resolve would silently drop the pin
+that failed. An unreachable pin exits 1 with or without `--exit-code`: that is
+not drift, it is a question left unanswered, and a CI gate that passes because
+pnix could not look is worse than one that fails.
 
 A tracked PR gaining commits is the one kind of upstream movement a plain `pnix
 update` ignores, because the declaration `{ pr = 181; }` has not changed. That is
