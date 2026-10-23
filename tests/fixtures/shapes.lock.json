@@ -1,0 +1,158 @@
+{
+  "schema": 5,
+  "pnix": "0.1.0",
+  "pins": {
+    "channelpin": {
+      "type": "channel",
+      "channel": "nixos-unstable",
+      "resolvedUrl": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1070770.8ce4ef6cb6f8/nixexprs.tar.xz",
+      "version": "nixos-26.11pre1070770.8ce4ef6cb6f8",
+      "rev": "8ce4ef6cb6f8",
+      "hash": "sha256-AAAABHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA=",
+      "lastModified": 1792415997,
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1070770.8ce4ef6cb6f8/nixexprs.tar.xz",
+        "hash": "sha256-AAAABHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+      }
+    },
+    "filepin": {
+      "type": "file",
+      "url": "https://example.invalid/latest/tool.json",
+      "resolvedUrl": "https://example.invalid/v1.2.3/tool.json",
+      "hash": "sha256-BBBBBHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA=",
+      "fetch": {
+        "kind": "file",
+        "url": "https://example.invalid/v1.2.3/tool.json",
+        "hash": "sha256-BBBBBHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+      }
+    },
+    "futurepin": {
+      "type": "git",
+      "url": "https://example.invalid/some/repo",
+      "rev": "ffffffffffffffffffffffffffffffffffffffff",
+      "ref": "HEAD",
+      "fetch": {
+        "kind": "git",
+        "url": "https://example.invalid/some/repo",
+        "rev": "ffffffffffffffffffffffffffffffffffffffff",
+        "ref": "HEAD",
+        "sparseCheckout": [
+          "subdir"
+        ]
+      },
+      "signedBy": "a-provenance-field-this-build-never-heard-of"
+    },
+    "localpin": {
+      "type": "path",
+      "path": "/home/someone/Projects/thing",
+      "fetch": {
+        "kind": "path",
+        "path": "/home/someone/Projects/thing"
+      }
+    },
+    "patchedpin": {
+      "type": "git",
+      "url": "https://example.invalid/finix/finix",
+      "rev": "1111111111111111111111111111111111111111",
+      "ref": "refs/tags/v5.0.0",
+      "submodules": true,
+      "shallow": true,
+      "lfs": true,
+      "exportIgnore": true,
+      "importable": true,
+      "follows": {
+        "nixpkgs": "nixpkgs"
+      },
+      "excludeFollow": [
+        "nixpkgs"
+      ],
+      "flake": true,
+      "dir": "nix",
+      "fetch": {
+        "kind": "git",
+        "url": "https://example.invalid/finix/finix",
+        "rev": "1111111111111111111111111111111111111111",
+        "ref": "refs/tags/v5.0.0",
+        "submodules": true,
+        "shallow": true,
+        "lfs": true,
+        "exportIgnore": true
+      },
+      "patches": [
+        {
+          "kind": "path",
+          "path": "patches/local-fix.patch",
+          "hash": "sha256-CCCCCHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+        },
+        {
+          "kind": "pr",
+          "forge": "github",
+          "host": "github.com",
+          "owner": "finix-community",
+          "repo": "finix",
+          "number": 181,
+          "head": "2222222222222222222222222222222222222222",
+          "base": "main",
+          "state": "open",
+          "merged": false,
+          "immutable": false,
+          "mergeBase": "3333333333333333333333333333333333333333",
+          "url": "https://github.com/finix-community/finix/pull/181.diff",
+          "hash": "sha256-DDDDDHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+        },
+        {
+          "kind": "commit",
+          "forge": "forgejo",
+          "host": "forgejo.example.invalid",
+          "owner": "someone",
+          "repo": "thing",
+          "rev": "4444444444444444444444444444444444444444",
+          "immutable": true,
+          "url": "https://forgejo.example.invalid/someone/thing/commit/4444444444444444444444444444444444444444.diff",
+          "hash": "sha256-EEEEEHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+        },
+        {
+          "kind": "url",
+          "immutable": true,
+          "url": "https://example.invalid/patches/fix.patch",
+          "hash": "sha256-FFFFFHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+        }
+      ],
+      "patchedHash": "sha256-GGGGGHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+    },
+    "releasepin": {
+      "type": "forgejo",
+      "host": "codeberg.org",
+      "owner": "someone",
+      "repo": "tool",
+      "url": "https://codeberg.org/someone/tool",
+      "release": "^1.3",
+      "tag": "v1.4.2",
+      "rev": "5555555555555555555555555555555555555555",
+      "hash": "sha256-HHHHHHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA=",
+      "lastModified": 1792415000,
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://codeberg.org/someone/tool/archive/v1.4.2.tar.gz",
+        "hash": "sha256-HHHHHHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+      }
+    },
+    "tagpin": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "someone",
+      "repo": "pinned",
+      "url": "https://github.com/someone/pinned",
+      "tag": "v2.0.0",
+      "rev": "6666666666666666666666666666666666666666",
+      "hash": "sha256-IIIIIHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA=",
+      "lastModified": 1792410000,
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/someone/pinned/archive/v2.0.0.tar.gz",
+        "hash": "sha256-IIIIIHmTnReG1GD+VQaw6xwyuYbabLZPS28xSfajiaA="
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "schema": 5,
+  "pnix": "0.1.0",
+  "pins": {
+    "fenix": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "nix-community",
+      "repo": "fenix",
+      "url": "https://github.com/nix-community/fenix",
+      "rev": "cd2704cee3dc20ceb397562930e310af5f86aede",
+      "ref": "HEAD",
+      "hash": "sha256-bZlZdPkXbPdTz9gUJRyDanGuvXpxvE7hhJC+M1nOEn0=",
+      "lastModified": 1792148656,
+      "follows": {
+        "nixpkgs": "nixpkgs"
+      },
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/nix-community/fenix/archive/cd2704cee3dc20ceb397562930e310af5f86aede.tar.gz",
+        "hash": "sha256-bZlZdPkXbPdTz9gUJRyDanGuvXpxvE7hhJC+M1nOEn0="
+      }
+    },
+    "nixpkgs": {
+      "type": "github",
+      "host": "github.com",
+      "owner": "NixOS",
+      "repo": "nixpkgs",
+      "url": "https://github.com/NixOS/nixpkgs",
+      "rev": "55bfb4d7437bd4e09ab7cba58a43bd68eb310044",
+      "ref": "nixos-unstable",
+      "hash": "sha256-jBYGPi4udQ9uo4KQp9m2J0546nJVQitG15gvZSaVVAs=",
+      "lastModified": 1791956154,
+      "flake": false,
+      "fetch": {
+        "kind": "tarball",
+        "url": "https://github.com/NixOS/nixpkgs/archive/55bfb4d7437bd4e09ab7cba58a43bd68eb310044.tar.gz",
+        "hash": "sha256-jBYGPi4udQ9uo4KQp9m2J0546nJVQitG15gvZSaVVAs="
+      }
+    }
+  }
+}
